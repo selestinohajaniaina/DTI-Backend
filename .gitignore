@@ -6,5 +6,13 @@ coverage/
 .env.*.local
 *.log
 .DS_Store
-uploads/
+# Generated images are runtime artifacts, but the directory skeleton is
+# tracked via .gitkeep so fresh clones and deploys contain uploads/generated/.
+# (Negations must list the directory chain: files under an excluded directory
+# cannot be re-included.)
+uploads/*
+!uploads/.gitkeep
+!uploads/generated/
+uploads/generated/*
+!uploads/generated/.gitkeep
 test-uploads/
