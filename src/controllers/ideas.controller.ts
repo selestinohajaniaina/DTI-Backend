@@ -10,10 +10,16 @@ export const generateIdeas = asyncHandler(async (req: Request, res: Response): P
   if (!file) {
     throw new AppError(400, 'VALIDATION_ERROR', 'An image file is required (field "image")');
   }
+  const ownership = req.ownership;
+  if (!ownership) {
+    // Unreachable: attachOwnership runs earlier on this route.
+    throw new AppError(500, 'INTERNAL_ERROR', 'Ownership context is missing');
+  }
   const result = await generateIdeasFromPhoto(file.buffer, {
     apiKey: env.modelApiKey,
     metaApiBase: env.metaApiBase,
     uploadDir: env.uploadDir,
+    ownership,
   });
   sendSuccess(res, result, 200);
 });

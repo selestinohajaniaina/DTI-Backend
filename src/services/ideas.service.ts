@@ -2,8 +2,19 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
+import { sequelize } from '../config/database';
+import {
+  GeneratedIdea as GeneratedIdeaModel,
+  SourceObject as SourceObjectModel,
+} from '../models/index';
+import type { GenerationOwnership } from '../types/ownership';
 import { AppError } from '../utils/errors';
-import { IMAGE_EXTENSION, IMAGE_MIME, detectImageKind } from '../utils/image';
+import {
+  IMAGE_EXTENSION,
+  IMAGE_MIME,
+  detectImageKind,
+  type SupportedImageKind,
+} from '../utils/image';
 import { logger } from '../utils/logger';
 import { extractAnswerText } from './ai.service';
 import { assertResponseCompleted, downloadImage, isRecord, postMetaJson } from './meta.client';
@@ -181,7 +192,24 @@ export interface IdeasDeps {
   apiKey: string | undefined;
   metaApiBase: string;
   uploadDir: string;
+  /**
+   * When provided, the generation is persisted (source object + three ideas
+   * in one transaction) and database IDs are merged into the result.
+   */
+  ownership?: GenerationOwnership;
 }
+
+/** Public result plus database IDs; anonymousOwnerId is null for signed-in callers. */
+export interface PersistedIdeasResult extends GenerateIdeasResult {
+  sourceObject: GenerateIdeasResult['sourceObject'] & { id: string };
+  ideas: (GeneratedIdea & { ideaId: string })[];
+  anonymousOwnerId: string | null;
+}
+
+/** Public URL prefix for files served from the upload directory. */
+export const UPLOADS_URL_PREFIX = '/uploads/';
+
+const SOURCE_IMAGES_DIR = 'source';
 
 const NO_MARKET_PRICE: MarketPriceInfo = {
   status: 'not_found',
@@ -264,13 +292,21 @@ async function generateAndStoreImage(
   await fs.mkdir(dir, { recursive: true });
   const filename = `idea-${crypto.randomUUID()}.${IMAGE_EXTENSION[kind]}`;
   await fs.writeFile(path.join(dir, filename), bytes);
-  return `/uploads/generated/${filename}`;
+  return `${UPLOADS_URL_PREFIX}generated/${filename}`;
 }
 
+export function generateIdeasFromPhoto(
+  image: Buffer,
+  deps: IdeasDeps & { ownership: GenerationOwnership },
+): Promise<PersistedIdeasResult>;
+export function generateIdeasFromPhoto(
+  image: Buffer,
+  deps: IdeasDeps,
+): Promise<GenerateIdeasResult>;
 export async function generateIdeasFromPhoto(
   image: Buffer,
   deps: IdeasDeps,
-): Promise<GenerateIdeasResult> {
+): Promise<GenerateIdeasResult | PersistedIdeasResult> {
   const apiKey = deps.apiKey;
   if (!apiKey) {
     throw new AppError(503, 'AI_NOT_CONFIGURED', 'Meta AI is not configured on this server');
@@ -340,9 +376,8 @@ export async function generateIdeasFromPhoto(
     ),
   );
 
-  return {
-    sourceObject: sparkOutput.sourceObject,
-    ideas: sparkOutput.ideas.map((idea: RawIdea, index: number): GeneratedIdea => {
+  const ideas: GeneratedIdea[] = sparkOutput.ideas.map(
+    (idea: RawIdea, index: number): GeneratedIdea => {
       const generated = images[index] ?? FAILED_IMAGE;
       return {
         id: `idea-${index + 1}`,
@@ -359,6 +394,130 @@ export async function generateIdeasFromPhoto(
           safetyNotes: idea.safetyNotes,
         },
       };
-    }),
+    },
+  );
+
+  if (!deps.ownership) {
+    return {
+      sourceObject: sparkOutput.sourceObject,
+      ideas,
+    };
+  }
+  return persistGeneration({
+    photo: image,
+    kind,
+    sparkOutput,
+    ideas,
+    images,
+    ownership: deps.ownership,
+    uploadDir: deps.uploadDir,
+  });
+}
+
+interface PersistGenerationInput {
+  photo: Buffer;
+  kind: SupportedImageKind;
+  sparkOutput: SparkOutput;
+  ideas: GeneratedIdea[];
+  images: GeneratedIdeaImage[];
+  ownership: GenerationOwnership;
+  uploadDir: string;
+}
+
+function toStorageKey(publicUrl: string | null): string | null {
+  if (publicUrl === null) {
+    return null;
+  }
+  if (!publicUrl.startsWith(UPLOADS_URL_PREFIX)) {
+    // Unreachable: every stored image URL is built with this prefix above.
+    throw new Error('Generated image URL has an unexpected format');
+  }
+  return publicUrl.slice(UPLOADS_URL_PREFIX.length);
+}
+
+/**
+ * Stores the source photo on disk, then the source object and its three
+ * ideas in a single transaction (a failure rolls everything back). Only
+ * storage keys are persisted, never image bytes or credentials.
+ */
+async function persistGeneration(input: PersistGenerationInput): Promise<PersistedIdeasResult> {
+  const [raw0, raw1, raw2] = input.sparkOutput.ideas;
+  const [idea0, idea1, idea2] = input.ideas;
+  const [image0, image1, image2] = input.images;
+  if (
+    !raw0 ||
+    !raw1 ||
+    !raw2 ||
+    !idea0 ||
+    !idea1 ||
+    !idea2 ||
+    !image0 ||
+    !image1 ||
+    !image2 ||
+    input.sparkOutput.ideas.length !== 3
+  ) {
+    // Unreachable: the Spark schema enforces exactly three ideas.
+    throw new Error('Cannot persist a generation without exactly three ideas');
+  }
+  const aligned = [
+    { raw: raw0, idea: idea0, image: image0 },
+    { raw: raw1, idea: idea1, image: image1 },
+    { raw: raw2, idea: idea2, image: image2 },
+  ];
+
+  const dir = path.join(input.uploadDir, SOURCE_IMAGES_DIR);
+  await fs.mkdir(dir, { recursive: true });
+  const filename = `source-${crypto.randomUUID()}.${IMAGE_EXTENSION[input.kind]}`;
+  await fs.writeFile(path.join(dir, filename), input.photo);
+  const sourceKey = `${SOURCE_IMAGES_DIR}/${filename}`;
+
+  const persisted = await sequelize.transaction(async (t) => {
+    const source = await SourceObjectModel.create(
+      {
+        ownerId: input.ownership.kind === 'user' ? input.ownership.userId : null,
+        anonymousOwnerId:
+          input.ownership.kind === 'anonymous' ? input.ownership.anonymousOwnerId : null,
+        imagePath: sourceKey,
+        name: input.sparkOutput.sourceObject.name,
+        material: input.sparkOutput.sourceObject.material,
+        condition: input.sparkOutput.sourceObject.condition,
+      },
+      { transaction: t },
+    );
+    const rows = await GeneratedIdeaModel.bulkCreate(
+      aligned.map(({ raw, image }) => ({
+        sourceObjectId: source.id,
+        title: raw.title,
+        description: raw.description,
+        intendedUse: raw.intendedUse,
+        additionalMaterials: raw.additionalMaterials,
+        tools: raw.tools,
+        difficulty: raw.difficulty,
+        estimatedMinutes: raw.estimatedMinutes,
+        tutorialSteps: raw.tutorialSteps,
+        safetyNotes: raw.safetyNotes,
+        imagePath: toStorageKey(image.url),
+        imageStatus: image.status,
+        marketPrice: { ...NO_MARKET_PRICE },
+      })),
+      { transaction: t },
+    );
+    const [row0, row1, row2] = rows;
+    if (!row0 || !row1 || !row2 || rows.length !== 3) {
+      throw new Error('Idea persistence returned an unexpected row count');
+    }
+    return { source, ideaIds: [row0.id, row1.id, row2.id] as [string, string, string] };
+  });
+
+  return {
+    sourceObject: { id: persisted.source.id, ...input.sparkOutput.sourceObject },
+    // Literal tuple indexes stay total under noUncheckedIndexedAccess.
+    ideas: [
+      { ...idea0, ideaId: persisted.ideaIds[0] },
+      { ...idea1, ideaId: persisted.ideaIds[1] },
+      { ...idea2, ideaId: persisted.ideaIds[2] },
+    ],
+    anonymousOwnerId:
+      input.ownership.kind === 'anonymous' ? input.ownership.anonymousOwnerId : null,
   };
 }

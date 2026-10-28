@@ -258,6 +258,21 @@ illustration yields `{ url: null, status: "failed" }` without dropping the
 other ideas. The route is intentionally public for the anonymous demo;
 add auth + rate limiting before any public exposure.
 
+Persistence: every successful generation stores one `source_objects` row
+(original photo key, detected name/material/condition) plus three
+`generated_ideas` rows (tutorial, safety notes, market price, image
+key/status) in a single transaction. Signed-in callers (optional
+`Authorization: Bearer` header) are recorded via `ownerId`; anonymous
+callers are grouped by `anonymousOwnerId`, taken from the
+`X-Anonymous-Owner-Id` header when it holds a valid UUID and
+server-generated otherwise (echoed as `anonymousOwnerId` in the response
+so clients can persist and reuse it). The response adds `sourceObject.id`,
+per-idea `ideaId`, and `anonymousOwnerId` to the existing shape. Only
+storage keys live in PostgreSQL — image bytes stay on disk under
+`UPLOAD_DIR` (`source/` for originals, `generated/` for illustrations),
+so files still need a persistent disk (or object storage) to survive
+redeploys; see the deploy section above.
+
 ### Authentication flow
 
 1. Client POSTs credentials to `/api/auth/register` or `/api/auth/login`.

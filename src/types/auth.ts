@@ -1,3 +1,5 @@
+import type { GenerationOwnership } from './ownership';
+
 export interface AccessTokenPayload {
   sub: string;
   email: string;
@@ -24,6 +26,7 @@ declare global {
   namespace Express {
     interface Request {
       user?: AuthenticatedUser;
+      ownership?: GenerationOwnership;
     }
   }
 }

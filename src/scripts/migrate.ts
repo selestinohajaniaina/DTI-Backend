@@ -33,10 +33,9 @@ async function main(): Promise<void> {
         console.log('nothing to revert');
       } else {
         const last = executed[executed.length - 1];
-        const previous = executed.length > 1 ? executed[executed.length - 2] : undefined;
-        // Revert exactly one migration: everything after `previous` (or all
-        // when `previous` does not exist).
-        const reverted = await migrator.down({ to: previous?.name ?? 0 });
+        // Revert exactly the newest migration. Umzug's `to` is inclusive:
+        // passing the previous migration would revert two.
+        const reverted = await migrator.down({ to: last?.name ?? 0 });
         for (const migration of reverted) {
           console.log(`reverted: ${migration.name}`);
         }

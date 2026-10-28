@@ -1,10 +1,17 @@
 import type { Sequelize } from 'sequelize';
+import { GeneratedIdea, initGeneratedIdeaModel } from './generated-idea.model';
+import { SourceObject, initSourceObjectModel } from './source-object.model';
 import { User, initUserModel } from './user.model';
 
 export function initModels(sequelize: Sequelize): void {
   initUserModel(sequelize);
-  // Register associations here when new models are added, e.g.:
-  // User.hasMany(Project, { foreignKey: 'ownerId' });
+  initSourceObjectModel(sequelize);
+  initGeneratedIdeaModel(sequelize);
+
+  User.hasMany(SourceObject, { foreignKey: 'ownerId' });
+  SourceObject.belongsTo(User, { foreignKey: 'ownerId' });
+  SourceObject.hasMany(GeneratedIdea, { foreignKey: 'sourceObjectId' });
+  GeneratedIdea.belongsTo(SourceObject, { foreignKey: 'sourceObjectId' });
 }
 
-export { User };
+export { GeneratedIdea, SourceObject, User };

@@ -1,6 +1,9 @@
 node_modules/
 dist/
 coverage/
+# Never commit in-place tsc output: stale .js next to sources shadows the
+# .ts files under Vitest (and breaks lint/format). Build output goes to dist/.
+src/**/*.js
 .env
 .env.test
 .env.*.local

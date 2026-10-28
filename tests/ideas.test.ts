@@ -10,9 +10,10 @@ import { app, parseJson } from './helpers';
 interface IdeasSuccessBody {
   success: boolean;
   data: {
-    sourceObject: { name: string; material: string; condition: string };
+    sourceObject: { id: string; name: string; material: string; condition: string };
     ideas: {
       id: string;
+      ideaId: string;
       title: string;
       description: string;
       difficulty: string;
@@ -32,6 +33,7 @@ interface IdeasSuccessBody {
         safetyNotes: string[];
       };
     }[];
+    anonymousOwnerId: string | null;
   };
 }
 
@@ -223,14 +225,13 @@ describe('POST /api/ai/generate-ideas', () => {
     expect(res.statusCode).toBe(200);
     const body = parseJson<IdeasSuccessBody>(res);
     expect(body.success).toBe(true);
-    expect(body.data.sourceObject).toEqual({
-      name: 'Cup',
-      material: 'plastic',
-      condition: 'reusable',
-    });
+    const { id, ...sourceFields } = body.data.sourceObject;
+    expect(typeof id).toBe('string');
+    expect(sourceFields).toEqual({ name: 'Cup', material: 'plastic', condition: 'reusable' });
     expect(body.data.ideas).toHaveLength(3);
     for (const [index, idea] of body.data.ideas.entries()) {
       expect(idea.id).toBe(`idea-${index + 1}`);
+      expect(idea.ideaId).toEqual(expect.any(String));
       expect(idea.image.status).toBe('completed');
       expect(idea.image.url).toMatch(/^\/uploads\/generated\/idea-.*\.png$/);
       expect(idea.marketPrice.status).toBe('not_found');
