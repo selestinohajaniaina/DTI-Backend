@@ -118,7 +118,9 @@ describe('POST /api/ai/test', () => {
   });
 
   it('returns 503 when the API key is not configured', async () => {
-    const failure = await runAiTest(PROMPT, undefined).catch((error: unknown) => error);
+    const failure = await runAiTest(PROMPT, undefined, env.metaApiBase).catch(
+      (error: unknown) => error,
+    );
 
     expect(failure).toBeInstanceOf(AppError);
     expect(failure).toMatchObject({ statusCode: 503, code: 'AI_NOT_CONFIGURED' });

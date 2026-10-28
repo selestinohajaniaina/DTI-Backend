@@ -28,8 +28,8 @@
 - Erreurs : `AppError(status, code, message)` ; erreurs Sequelize mappées (contrainte unique → 409, validation → 400, JSON malformé → 400) ; 500 générique en production, sans stack ni détails internes.
 - Validation Zod systématique des entrées (`validateBody`) ; emails via `normalizeEmail()` ; login à réponse uniforme (anti-énumération) ; ne jamais faire confiance à un id client à la place de `req.user`.
 - Base : migrations Umzug dans `src/migrations/` **uniquement** (jamais `sync({ alter|force })`) ; **ajouter chaque nouvelle migration à la liste statique de `tests/setup.ts`** (le glob ne charge pas le `.ts` sous Vitest) ; seed idempotent `seeders/dev.seed.ts`, refusé en production sauf override explicite.
-- IA : `services/ai.service.ts` appelle Meta Responses API en `fetch` natif (timeout 30s) ; extraction défensive du texte (`output[]` → messages `output_text`/`refusal`, autres items ignorés) ; clé via `MODEL_API_KEY`, jamais loguée ni renvoyée.
-- Env : `DATABASE_URL` ou parties `DB_*`, `TEST_DATABASE_URL` (nom contenant `test`, garde anti dev/prod), `JWT_SECRET` 32+ caractères, `JWT_EXPIRES_IN`, `BCRYPT_ROUNDS`, `MODEL_API_KEY` (optionnel, requis pour `/api/ai/*`) ; `.env`/`.env.test` gitignorés ; secrets et clés IA exclusivement serveur.
+- IA : transport partagé `services/meta.client.ts` (`fetch` natif, timeouts, erreurs 502/504, jamais de clé loguée) ; `services/ai.service.ts` (test texte) ; `services/ideas.service.ts` (Spark `json_schema` + 3 illustrations `muse-image-1.0` en parallèle avec photo en référence, échec par idée préservé) ; upload `multer` mémoire + magic bytes (`utils/image.ts`) ; images servies via `/uploads` (express.static).
+- Env : `DATABASE_URL` ou parties `DB_*`, `TEST_DATABASE_URL` (nom contenant `test`, garde anti dev/prod), `JWT_SECRET` 32+ caractères, `JWT_EXPIRES_IN`, `BCRYPT_ROUNDS`, `MODEL_API_KEY` (optionnel, requis pour `/api/ai/*`), `UPLOAD_DIR` (défaut `uploads`), `META_API_BASE` (override staging/mocks) ; `.env`/`.env.test` gitignorés ; secrets et clés IA exclusivement serveur.
 - Sécurité : Helmet, CORS sur `FRONTEND_URL`, JSON limité à 100kb, requêtes via l'ORM (paramétrées, jamais de SQL concaténé), pas de secrets/tokens/mots de passe dans les logs ; futures API externes appelées depuis le backend avec timeout et gestion d'erreurs.
 - Docker : `db` (healthcheck, volume `pgdata`, port hôte `127.0.0.1:5433`) + `api` (non-root, `depends_on` healthy, migrations au boot). Dev : `docker compose up -d db` + `npm run dev`. Ne pas monter le code source en production.
 
@@ -39,4 +39,4 @@
 - `npm run lint` / `lint:fix`, `npm run format` / `format:check`.
 - `npm test` / `test:watch` (base de test requise, suite séquentielle).
 - `npm run db:migrate` / `db:migrate:undo` / `db:migrate:status`, `npm run db:seed`.
-- Conteneurs : `docker compose up --build`, `down` (garde les données), `down -v` (les détruit).
+- Conteneurs : `docker compose up --build`, `down` (garde les données), `down -v` (les détruit) ; dev avec rechargement : `npm run dev:docker` (overlay `docker-compose.dev.yml` + Watch, cible `development`, prod inchangée).

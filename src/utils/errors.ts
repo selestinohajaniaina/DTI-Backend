@@ -13,6 +13,7 @@ export type ErrorCode =
   | 'AI_NOT_CONFIGURED'
   | 'AI_UPSTREAM_ERROR'
   | 'AI_TIMEOUT'
+  | 'FILE_TOO_LARGE'
   | 'INTERNAL_ERROR';
 
 /** Operational error with an HTTP status and a stable machine-readable code. */

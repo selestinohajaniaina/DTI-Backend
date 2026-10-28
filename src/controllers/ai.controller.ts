@@ -7,6 +7,6 @@ import { sendSuccess } from '../utils/response';
 
 export const testAi = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const input = req.body as AiTestInput;
-  const result = await runAiTest(input.prompt, env.modelApiKey);
+  const result = await runAiTest(input.prompt, env.modelApiKey, env.metaApiBase);
   sendSuccess(res, result, 200);
 });

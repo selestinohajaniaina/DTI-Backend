@@ -12,6 +12,17 @@ FROM dependencies AS build
 COPY . .
 RUN npm run build
 
+# ---- Development runtime: full deps + tsx live reload (Compose Watch target) ----
+# Used only via docker-compose.dev.yml. Runs `npm run dev` (tsx watch), so
+# files synced by `develop.watch` trigger an automatic restart. Never used
+# for production builds (see the `production` stage below).
+FROM dependencies AS development
+ENV NODE_ENV=development
+COPY --chown=node:node . .
+USER node
+EXPOSE 3000
+CMD ["npm", "run", "dev"]
+
 # ---- Production runtime: no dev dependencies, non-root user ----
 FROM base AS production
 ENV NODE_ENV=production

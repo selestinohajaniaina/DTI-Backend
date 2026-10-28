@@ -109,6 +109,23 @@ interpolation; set `NODE_ENV=production` there for a production-like run.
 PostgreSQL is reachable from the host only via `127.0.0.1:5433` (service `db`
 itself is reachable as hostname `db` inside the private `backend` network).
 
+## Containerized development with live reload (Compose Watch)
+
+```bash
+npm run dev:docker
+# equivalent: docker compose -f docker-compose.yml -f docker-compose.dev.yml up --watch
+```
+
+This builds the `development` image target (full dependencies + `tsx watch`)
+and starts Compose Watch: editing a file under `src/` (or `tests/`,
+`tsconfig.json`) syncs it into the container and tsx restarts the API
+automatically — no manual rebuild. `docker-compose.yml` is untouched, so plain
+`docker compose up --build` keeps running the production image.
+
+A rebuild happens automatically only when `package.json`, `package-lock.json`
+or the `Dockerfile` changes. Restart manually after editing other
+non-watched files (e.g. `.env`, `docker-compose.dev.yml` itself).
+
 ## Database
 
 ```bash
@@ -149,14 +166,15 @@ database and need no listening ports.
 
 Base URL (dev): `http://127.0.0.1:3000`
 
-| Method | Path                 | Auth   | Description                                  |
-| ------ | -------------------- | ------ | -------------------------------------------- |
-| GET    | `/api/health`        | no     | Liveness (`{ status: "ok", ... }`)           |
-| GET    | `/api/health/ready`  | no     | Readiness (checks DB, 503 if down)           |
-| POST   | `/api/auth/register` | no     | Register; 201 `{ user, token }`              |
-| POST   | `/api/auth/login`    | no     | Login; 200 `{ user, token }`                 |
-| GET    | `/api/auth/me`       | Bearer | Current user; 401 without valid JWT          |
-| POST   | `/api/ai/test`       | Bearer | Meta AI test prompt; 200 `{ model, answer }` |
+| Method | Path                     | Auth   | Description                                                          |
+| ------ | ------------------------ | ------ | -------------------------------------------------------------------- |
+| GET    | `/api/health`            | no     | Liveness (`{ status: "ok", ... }`)                                   |
+| GET    | `/api/health/ready`      | no     | Readiness (checks DB, 503 if down)                                   |
+| POST   | `/api/auth/register`     | no     | Register; 201 `{ user, token }`                                      |
+| POST   | `/api/auth/login`        | no     | Login; 200 `{ user, token }`                                         |
+| GET    | `/api/auth/me`           | Bearer | Current user; 401 without valid JWT                                  |
+| POST   | `/api/ai/test`           | Bearer | Meta AI test prompt; 200 `{ model, answer }`                         |
+| POST   | `/api/ai/generate-ideas` | no     | Photo-to-ideas (multipart `image`); 200 `{ sourceObject, ideas[3] }` |
 
 Sample requests:
 
@@ -177,8 +195,8 @@ Error codes: `VALIDATION_ERROR`, `INVALID_JSON`, `NOT_FOUND`, `EMAIL_TAKEN`
 (409), `INVALID_CREDENTIALS` (401, same for unknown email and wrong password),
 `MISSING_TOKEN` / `INVALID_TOKEN` / `TOKEN_EXPIRED` (401), `USER_NOT_FOUND`,
 `CONFLICT` (409), `DATABASE_UNAVAILABLE` (503), `AI_NOT_CONFIGURED` (503),
-`AI_UPSTREAM_ERROR` (502), `AI_TIMEOUT` (504), `INTERNAL_ERROR` (500, no
-internals leaked in production).
+`AI_UPSTREAM_ERROR` (502), `AI_TIMEOUT` (504), `FILE_TOO_LARGE` (413),
+`INTERNAL_ERROR` (500, no internals leaked in production).
 
 ### AI test route (Postman)
 
@@ -197,6 +215,27 @@ curl -X POST http://127.0.0.1:3000/api/ai/test \
 Without a key the route answers `503 AI_NOT_CONFIGURED`. Meta failures map to
 `502 AI_UPSTREAM_ERROR` (or `504 AI_TIMEOUT`) without leaking internals. The
 key travels in the server-side `Authorization` header only.
+
+### Upcycling ideas (prototype)
+
+`POST /api/ai/generate-ideas` accepts `multipart/form-data` with an `image`
+field (JPEG/PNG/WebP/GIF verified by magic bytes, 10 MB max) and returns
+`{ sourceObject, ideas[3] }`: title, description, difficulty, estimated
+minutes, tutorial (materials, tools, steps, safety notes), market price
+(always `not_found` for now — no fake research), and an illustration per idea.
+
+```bash
+curl -X POST http://127.0.0.1:3000/api/ai/generate-ideas \
+  -F "image=@/path/to/photo.jpg"
+```
+
+Flow: Muse Spark analyzes the photo (JSON-schema-constrained output,
+validated with Zod), then Muse Image (`muse-image-1.0` edits, original photo
+as reference) illustrates each idea in parallel. Generated files are stored
+under `<UPLOAD_DIR>/generated/` and served at `/uploads/...`. A failed
+illustration yields `{ url: null, status: "failed" }` without dropping the
+other ideas. The route is intentionally public for the anonymous demo;
+add auth + rate limiting before any public exposure.
 
 ### Authentication flow
 

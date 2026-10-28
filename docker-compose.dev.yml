@@ -1,0 +1,42 @@
+# Development overlay: live reload via Docker Compose Watch (Compose >= 2.22).
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up --watch
+#   (or: npm run dev:docker)
+#
+# What changes vs production (this file only; docker-compose.yml is untouched):
+# - api builds the `development` image target (full dependencies + tsx watch)
+# - NODE_ENV=development
+# - Watch syncs TypeScript sources into the container; tsx restarts the server
+# - Watch rebuilds the image only when dependencies or the Dockerfile change
+#
+# The db service, volumes, networks, ports and every other setting are
+# inherited unchanged from docker-compose.yml.
+#
+# Watched paths are scoped to source files on purpose: node_modules, .git,
+# dist, coverage, logs and .env files can never match a rule, so they are
+# structurally excluded from watching (and .env secrets can never be synced).
+
+services:
+  api:
+    build:
+      target: development
+    environment:
+      NODE_ENV: development
+    develop:
+      watch:
+        - action: sync
+          path: ./src
+          target: /app/src
+        - action: sync
+          path: ./tests
+          target: /app/tests
+        - action: sync
+          path: ./tsconfig.json
+          target: /app/tsconfig.json
+        - action: rebuild
+          path: ./package.json
+        - action: rebuild
+          path: ./package-lock.json
+        - action: rebuild
+          path: ./Dockerfile

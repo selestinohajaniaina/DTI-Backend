@@ -11,7 +11,9 @@ import { apiRouter } from './routes/index';
 export function createApp(): Express {
   const app = express();
   app.disable('x-powered-by');
-  app.use(helmet());
+  // Images under /uploads are meant to be embedded cross-origin (Angular dev
+  // server); the default same-origin resource policy would block them.
+  app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   app.use(
     cors({
       origin: env.frontendOrigins,
@@ -22,6 +24,12 @@ export function createApp(): Express {
   );
   app.use(express.json({ limit: '100kb' }));
   app.use(requestLogger);
+  // Backend-managed generated assets only (server-chosen filenames under
+  // <uploadDir>/generated). No directory listing, no dotfiles.
+  app.use(
+    '/uploads',
+    express.static(env.uploadDir, { dotfiles: 'deny', index: false, maxAge: '1d' }),
+  );
   app.use('/api', apiRouter);
   app.use(notFound);
   app.use(errorHandler);

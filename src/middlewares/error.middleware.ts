@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
+import { MulterError } from 'multer';
 import { UniqueConstraintError, ValidationError } from 'sequelize';
 import { env } from '../config/env';
 import { AppError } from '../utils/errors';
@@ -77,6 +78,15 @@ export function errorHandler(
 
   if (isJsonParseError(error)) {
     sendError(res, 400, 'INVALID_JSON', 'Malformed JSON body');
+    return;
+  }
+
+  if (error instanceof MulterError) {
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      sendError(res, 413, 'FILE_TOO_LARGE', 'Uploaded image exceeds the size limit');
+    } else {
+      sendError(res, 400, 'VALIDATION_ERROR', 'Invalid file upload');
+    }
     return;
   }
 

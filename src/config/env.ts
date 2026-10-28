@@ -73,6 +73,8 @@ const envSchema = z
       .string()
       .optional()
       .transform((value) => (value && value.length > 0 ? value : undefined)),
+    META_API_BASE: z.string().url().default('https://api.meta.ai/v1'),
+    UPLOAD_DIR: z.string().min(1).default('uploads'),
     ALLOW_SEED_IN_PRODUCTION: booleanFromString,
   })
   .superRefine((value, ctx) => {
@@ -150,6 +152,8 @@ export const env = {
   jwtExpiresIn: values.JWT_EXPIRES_IN,
   bcryptRounds: values.BCRYPT_ROUNDS,
   modelApiKey: values.MODEL_API_KEY,
+  metaApiBase: values.META_API_BASE,
+  uploadDir: values.UPLOAD_DIR,
   allowSeedInProduction: values.ALLOW_SEED_IN_PRODUCTION,
   isProduction: values.NODE_ENV === 'production',
   isTest: values.NODE_ENV === 'test',

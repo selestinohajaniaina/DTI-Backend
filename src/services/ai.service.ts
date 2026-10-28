@@ -1,20 +1,11 @@
 import { AppError } from '../utils/errors';
 import { logger } from '../utils/logger';
+import { assertResponseCompleted, isRecord, postMetaJson } from './meta.client';
 
 export const META_RESPONSES_URL = 'https://api.meta.ai/v1/responses';
 export const META_TEST_MODEL = 'muse-spark-1.3';
 
 const REQUEST_TIMEOUT_MS = 30_000;
-const MAX_UPSTREAM_LOG_CHARS = 200;
-
-export interface AiTestResult {
-  model: string;
-  answer: string;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
 
 /**
  * Concatenates generated text from a Responses API payload, following the
@@ -57,60 +48,33 @@ export function extractAnswerText(payload: unknown): string | undefined {
   return chunks.join('');
 }
 
+export interface AiTestResult {
+  model: string;
+  answer: string;
+}
+
 /**
  * Sends one prompt to Meta Muse AI (Responses API) and returns the generated
- * text. Uses the native fetch API: no extra dependency. The API key travels
- * in the Authorization header only and is never logged or returned.
+ * text. The API key travels in the Authorization header only and is never
+ * logged or returned.
  */
-export async function runAiTest(prompt: string, apiKey: string | undefined): Promise<AiTestResult> {
+export async function runAiTest(
+  prompt: string,
+  apiKey: string | undefined,
+  metaApiBase: string,
+): Promise<AiTestResult> {
   if (!apiKey) {
     throw new AppError(503, 'AI_NOT_CONFIGURED', 'Meta AI is not configured on this server');
   }
 
-  let res: Response;
-  try {
-    res = await fetch(META_RESPONSES_URL, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ model: META_TEST_MODEL, input: prompt }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-  } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      logger.warn('meta ai request timed out', {
-        model: META_TEST_MODEL,
-        timeoutMs: REQUEST_TIMEOUT_MS,
-      });
-      throw new AppError(504, 'AI_TIMEOUT', 'Meta AI request timed out');
-    }
-    logger.warn('meta ai request failed', { model: META_TEST_MODEL });
-    throw new AppError(502, 'AI_UPSTREAM_ERROR', 'Meta AI request failed');
-  }
-
-  if (!res.ok) {
-    // The key is header-only, never in the body, so a short upstream snippet
-    // is safe to log. Never log request headers.
-    const snippet = (await res.text().catch(() => '')).slice(0, MAX_UPSTREAM_LOG_CHARS);
-    logger.warn('meta ai responded with an error', { status: res.status, body: snippet });
-    throw new AppError(502, 'AI_UPSTREAM_ERROR', 'Meta AI request failed');
-  }
-
-  const payload: unknown = await res.json().catch(() => undefined);
-  if (payload === undefined) {
-    logger.warn('meta ai returned invalid json', { status: res.status });
-    throw new AppError(502, 'AI_UPSTREAM_ERROR', 'Meta AI request failed');
-  }
-  if (isRecord(payload) && payload['status'] === 'failed') {
-    const failure = isRecord(payload['error']) ? payload['error'] : undefined;
-    logger.warn('meta ai generation failed', {
-      code: typeof failure?.['code'] === 'string' ? failure['code'] : 'unknown',
-      message: typeof failure?.['message'] === 'string' ? failure['message'] : 'unknown',
-    });
-    throw new AppError(502, 'AI_UPSTREAM_ERROR', 'Meta AI request failed');
-  }
+  const payload = await postMetaJson(
+    metaApiBase,
+    '/responses',
+    { model: META_TEST_MODEL, input: prompt },
+    apiKey,
+    REQUEST_TIMEOUT_MS,
+  );
+  assertResponseCompleted(payload);
 
   const answer = extractAnswerText(payload);
   if (!answer) {
