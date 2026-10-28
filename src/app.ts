@@ -16,7 +16,7 @@ export function createApp(): Express {
   app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
   app.use(
     cors({
-      origin: env.frontendOrigins,
+      origin: '*',
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       // X-Anonymous-Owner-Id carries the stable anonymous owner UUID.
       allowedHeaders: ['Content-Type', 'Authorization', 'X-Anonymous-Owner-Id'],
