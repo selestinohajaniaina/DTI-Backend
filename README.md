@@ -149,13 +149,14 @@ database and need no listening ports.
 
 Base URL (dev): `http://127.0.0.1:3000`
 
-| Method | Path                 | Auth   | Description                         |
-| ------ | -------------------- | ------ | ----------------------------------- |
-| GET    | `/api/health`        | no     | Liveness (`{ status: "ok", ... }`)  |
-| GET    | `/api/health/ready`  | no     | Readiness (checks DB, 503 if down)  |
-| POST   | `/api/auth/register` | no     | Register; 201 `{ user, token }`     |
-| POST   | `/api/auth/login`    | no     | Login; 200 `{ user, token }`        |
-| GET    | `/api/auth/me`       | Bearer | Current user; 401 without valid JWT |
+| Method | Path                 | Auth   | Description                                  |
+| ------ | -------------------- | ------ | -------------------------------------------- |
+| GET    | `/api/health`        | no     | Liveness (`{ status: "ok", ... }`)           |
+| GET    | `/api/health/ready`  | no     | Readiness (checks DB, 503 if down)           |
+| POST   | `/api/auth/register` | no     | Register; 201 `{ user, token }`              |
+| POST   | `/api/auth/login`    | no     | Login; 200 `{ user, token }`                 |
+| GET    | `/api/auth/me`       | Bearer | Current user; 401 without valid JWT          |
+| POST   | `/api/ai/test`       | Bearer | Meta AI test prompt; 200 `{ model, answer }` |
 
 Sample requests:
 
@@ -175,8 +176,27 @@ curl http://127.0.0.1:3000/api/auth/me -H "Authorization: Bearer $TOKEN"
 Error codes: `VALIDATION_ERROR`, `INVALID_JSON`, `NOT_FOUND`, `EMAIL_TAKEN`
 (409), `INVALID_CREDENTIALS` (401, same for unknown email and wrong password),
 `MISSING_TOKEN` / `INVALID_TOKEN` / `TOKEN_EXPIRED` (401), `USER_NOT_FOUND`,
-`CONFLICT` (409), `DATABASE_UNAVAILABLE` (503), `INTERNAL_ERROR` (500, no
+`CONFLICT` (409), `DATABASE_UNAVAILABLE` (503), `AI_NOT_CONFIGURED` (503),
+`AI_UPSTREAM_ERROR` (502), `AI_TIMEOUT` (504), `INTERNAL_ERROR` (500, no
 internals leaked in production).
+
+### AI test route (Postman)
+
+1. Set `MODEL_API_KEY` in `.env` (create one on the
+   [Meta dashboard](https://dev.meta.ai)) and restart the API.
+2. Register and log in to obtain a token (see Sample requests above).
+3. Call the route:
+
+```bash
+curl -X POST http://127.0.0.1:3000/api/ai/test \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"Suggest three ways to reuse an empty plastic bottle."}'
+```
+
+Without a key the route answers `503 AI_NOT_CONFIGURED`. Meta failures map to
+`502 AI_UPSTREAM_ERROR` (or `504 AI_TIMEOUT`) without leaking internals. The
+key travels in the server-side `Authorization` header only.
 
 ### Authentication flow
 

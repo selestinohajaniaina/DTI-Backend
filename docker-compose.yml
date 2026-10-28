@@ -42,6 +42,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in your .env file}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-15m}
       BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-12}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
     ports:
       - '${PORT:-3000}:${PORT:-3000}'
     networks:

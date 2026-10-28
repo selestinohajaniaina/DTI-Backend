@@ -10,6 +10,9 @@ export type ErrorCode =
   | 'TOKEN_EXPIRED'
   | 'CONFLICT'
   | 'DATABASE_UNAVAILABLE'
+  | 'AI_NOT_CONFIGURED'
+  | 'AI_UPSTREAM_ERROR'
+  | 'AI_TIMEOUT'
   | 'INTERNAL_ERROR';
 
 /** Operational error with an HTTP status and a stable machine-readable code. */

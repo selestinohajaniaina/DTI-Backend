@@ -67,6 +67,12 @@ const envSchema = z
       .regex(expiresInPattern, 'JWT_EXPIRES_IN must look like "15m", "1h" or "3600"')
       .default('15m'),
     BCRYPT_ROUNDS: z.coerce.number().int().min(4).max(31).default(12),
+    // Optional: only POST /api/ai/test needs it. Empty string counts as unset
+    // so Compose can pass MODEL_API_KEY: ${MODEL_API_KEY:-} without breaking boot.
+    MODEL_API_KEY: z
+      .string()
+      .optional()
+      .transform((value) => (value && value.length > 0 ? value : undefined)),
     ALLOW_SEED_IN_PRODUCTION: booleanFromString,
   })
   .superRefine((value, ctx) => {
@@ -143,6 +149,7 @@ export const env = {
   jwtSecret: values.JWT_SECRET,
   jwtExpiresIn: values.JWT_EXPIRES_IN,
   bcryptRounds: values.BCRYPT_ROUNDS,
+  modelApiKey: values.MODEL_API_KEY,
   allowSeedInProduction: values.ALLOW_SEED_IN_PRODUCTION,
   isProduction: values.NODE_ENV === 'production',
   isTest: values.NODE_ENV === 'test',
