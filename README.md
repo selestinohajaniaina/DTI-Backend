@@ -119,16 +119,16 @@ Render web service settings (native Node runtime):
 
 Required environment variables on Render:
 
-| Variable                     | Value                                                       |
-| ---------------------------- | ----------------------------------------------------------- |
-| `NODE_ENV`                   | `production`                                                |
-| `DATABASE_URL`               | Render Postgres **internal** URL (auto-filled when linked)  |
-| `DB_SSL`                     | `true`                                                      |
-| `DB_SSL_REJECT_UNAUTHORIZED` | `false` (Render internal certs are self-signed — see below) |
-| `JWT_SECRET`                 | Random secret, 32+ characters                               |
-| `JWT_EXPIRES_IN`             | `15m` (optional, this is the default)                       |
-| `FRONTEND_URL`               | Production frontend origin(s), comma-separated              |
-| `MODEL_API_KEY`              | Meta API key (only needed for `/api/ai/*`)                  |
+| Variable                     | Value                                                                 |
+| ---------------------------- | --------------------------------------------------------------------- |
+| `NODE_ENV`                   | `production`                                                          |
+| `DATABASE_URL`               | Render Postgres **internal** URL (auto-filled when linked)            |
+| `DB_SSL`                     | `true`                                                                |
+| `DB_SSL_REJECT_UNAUTHORIZED` | `false` (Render internal certs are self-signed — see below)           |
+| `JWT_SECRET`                 | Random secret, 32+ characters                                         |
+| `JWT_EXPIRES_IN`             | `15m` (optional, this is the default)                                 |
+| `FRONTEND_URL`               | `https://dti-ai.vercel.app` (or unset: the default already allows it) |
+| `MODEL_API_KEY`              | Meta API key (only needed for `/api/ai/*`)                            |
 
 TLS note: Render internal database connections use self-signed certificates
 (Render documents `sslmode=require`, with `verify-ca`/`verify-full`
@@ -288,7 +288,8 @@ Angular app at `../DTI` only needs the base URL (default dev serving on
 `:4200`, backend on `:3000`) — e.g. an `ApiService` with
 `http.post('http://127.0.0.1:3000/api/auth/login', ...)`, storing the returned
 token and attaching it as a Bearer header (an HTTP interceptor). CORS already
-allows `FRONTEND_URL` (default `http://localhost:4200`). Never expose
+allows `FRONTEND_URL` (default `http://localhost:4200` plus the production
+`https://dti-ai.vercel.app`). Never expose
 `JWT_SECRET`, `DATABASE_URL`, or future AI provider keys to the browser.
 
 ## Troubleshooting
@@ -296,6 +297,26 @@ allows `FRONTEND_URL` (default `http://localhost:4200`). Never expose
 - **`Invalid environment configuration` on boot**: a required variable is
   missing or malformed; the message names each field (never values). Compare
   `.env` against `.env.example`.
+- **Browser CORS error on the production frontend**: the backend must allow
+  `https://dti-ai.vercel.app`. The code default already does; if
+  `FRONTEND_URL` is set on Render, make sure it includes that origin
+  (comma-separated, no trailing slash). Every app response — including
+  4xx/5xx errors — carries CORS headers for allowed origins, so after the
+  fix the browser shows the real error body instead of a CORS message.
+- **502 Bad Gateway on Render**: first open `GET /api/health` directly. If
+  it also fails, the service itself is unhealthy — Render lists the usual
+  causes (failed deploy, failing health checks, wrong host/port). In
+  particular, never set `HOST=127.0.0.1` on Render (that value is only for
+  local `.env` files): the service must listen on `0.0.0.0`, and the boot
+  log warns when production binds a loopback host. If only
+  `/api/ai/generate-ideas` fails, read the Render logs: `request` lines
+  carry per-request `status`/`durationMs`, and `meta ai ...` warnings carry
+  the upstream status plus a short safe snippet — they distinguish a fast
+  upstream rejection (`AI_UPSTREAM_ERROR`, e.g. bad key or Meta outage)
+  from a slow generation hitting `AI_TIMEOUT` (504, one phase exceeded its
+  180 s budget). Note the load balancer's own error pages carry no CORS
+  headers, so a platform-level 502 always looks like a CORS error in the
+  browser — check the logs, not just the console.
 - **API can't reach the DB**: check that `DATABASE_URL` points at a running,
   reachable PostgreSQL and that the provider's firewall/IP allow-list permits
   the connection. Managed providers require `DB_SSL=true`.

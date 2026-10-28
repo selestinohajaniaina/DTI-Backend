@@ -6,6 +6,17 @@ import { logger } from './utils/logger';
 
 async function main(): Promise<void> {
   logger.info('starting dti backend', { nodeEnv: env.nodeEnv, port: env.port });
+  if (
+    env.isProduction &&
+    (env.host === '127.0.0.1' || env.host === 'localhost' || env.host === '::1')
+  ) {
+    // Binding loopback in production makes the service unreachable from the
+    // hosting load balancer (surfaces as 502 Bad Gateway on Render). Leave
+    // HOST unset so it defaults to 0.0.0.0.
+    logger.warn('production server bound to a loopback host; use 0.0.0.0', {
+      host: env.host,
+    });
+  }
   await waitForDatabase();
 
   const migrator = createMigrator(sequelize);

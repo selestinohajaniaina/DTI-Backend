@@ -18,7 +18,8 @@ export function createApp(): Express {
     cors({
       origin: env.frontendOrigins,
       methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization'],
+      // X-Anonymous-Owner-Id carries the stable anonymous owner UUID.
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Anonymous-Owner-Id'],
       maxAge: 600,
     }),
   );
