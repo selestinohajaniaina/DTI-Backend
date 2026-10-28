@@ -1,6 +1,12 @@
 import type { Sequelize } from 'sequelize';
 import { sequelize } from '../config/database';
-import { createMigrator, type InlineMigration } from '../config/umzug';
+import {
+  createMigrator,
+  findExtensionMismatch,
+  readRecordedMigrationNames,
+  type ExtensionMismatch,
+  type InlineMigration,
+} from '../config/umzug';
 
 type Command = 'up' | 'down' | 'status';
 
@@ -44,68 +50,20 @@ function findAlreadyExistsEvidence(error: unknown): string | undefined {
   return undefined;
 }
 
-function stripMigrationExtension(name: string): string {
-  return name.replace(/\.(ts|js)$/, '');
-}
-
-export interface ExtensionMismatch {
-  pending: string;
-  recorded: string;
-}
-
-/**
- * Detects history recorded under a different file extension than the pending
- * files: `npm run db:migrate` (tsx) records `.ts` names while the compiled
- * server records `.js` names, and Umzug treats those as different entries.
- */
-export function findExtensionMismatch(
-  recorded: readonly { name: string }[],
-  pending: readonly { name: string }[],
-): ExtensionMismatch | undefined {
-  const recordedBase = new Map<string, string>();
-  for (const migration of recorded) {
-    recordedBase.set(stripMigrationExtension(migration.name), migration.name);
-  }
-  for (const migration of pending) {
-    const counterpart = recordedBase.get(stripMigrationExtension(migration.name));
-    if (counterpart !== undefined && counterpart !== migration.name) {
-      return { pending: migration.name, recorded: counterpart };
-    }
-  }
-  return undefined;
-}
-
-/**
- * Reads raw history rows. Unlike `migrator.executed()`, this also returns
- * rows Umzug no longer recognizes (e.g. `.ts` names when running compiled
- * `.js` migrations), which is exactly the inconsistency we must detect.
- */
-async function readRecordedMigrationNames(db: Sequelize): Promise<string[]> {
-  try {
-    const [rows] = await db.query('SELECT name FROM "SequelizeMeta" ORDER BY name;');
-    return (rows as { name: string }[]).map((row) => row.name);
-  } catch (error: unknown) {
-    if (isRecord(error) && isRecord(error['parent']) && error['parent']['code'] === '42P01') {
-      // Fresh database: the storage table does not exist yet.
-      return [];
-    }
-    throw error;
-  }
-}
-
 function printExtensionMismatchGuidance(mismatch: ExtensionMismatch): void {
   console.error('Migration history mismatch: the same migration is recorded under a');
   console.error('different file name. Nothing was applied.');
   console.error(`  recorded as executed: ${mismatch.recorded}`);
   console.error(`  now seen as pending:  ${mismatch.pending}`);
-  console.error('Common cause: `npm run db:migrate` (tsx) records `.ts` names while the');
-  console.error('compiled server records `.js` names. Reconcile safely:');
+  console.error('Common cause: an older server version applied `.js` names at boot');
+  console.error('while `npm run db:migrate` (tsx) records `.ts` names. Current versions never');
+  console.error('apply at boot; `db:migrate` is the single writer. Reconcile safely:');
   console.error('  1. Back up the database.');
   console.error('  2. Confirm the schema is complete (`npm run db:migrate:status`, psql \\dt).');
   console.error('  3. If it is, record the missing history rows explicitly instead of');
   console.error('     re-applying, e.g. INSERT INTO "SequelizeMeta" ("name") VALUES (...);');
-  console.error('  4. Then keep one runner per database (tsx for development, compiled');
-  console.error('     output for production).');
+  console.error('  4. Then always migrate with `npm run db:migrate` (tsx), including on');
+  console.error('     Render (`npm run db:migrate && npm start`).');
 }
 
 function printSchemaMismatchGuidance(evidence: string): void {
@@ -126,7 +84,7 @@ function printSchemaMismatchGuidance(evidence: string): void {
  * Runs one migrate command, returning the process exit code. Exported for
  * tests; `db` and `migrations` let tests use an isolated connection and
  * statically imported migrations (Umzug's glob cannot load raw `.ts` files
- * under Vitest, so tests pass the same list as `tests/setup.ts`).
+ * under Vitest, so tests pass `tests/migration-list.ts`).
  */
 export async function runCommand(
   raw: string | undefined,

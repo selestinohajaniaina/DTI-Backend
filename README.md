@@ -89,7 +89,7 @@ server), then:
 
 ```bash
 npm ci
-npm run db:migrate                # create tables (also runs automatically on boot)
+npm run db:migrate                # create tables (required before `npm start`)
 npm run dev                       # API on http://127.0.0.1:3000 with live reload
 ```
 
@@ -136,9 +136,12 @@ unsupported), so `DB_SSL_REJECT_UNAUTHORIZED=false` is required there. For
 external URLs or providers with valid certificates (Neon, Supabase, ...),
 keep the default `true` so certificates are verified.
 
-Migrations run automatically on every boot (`migrator.up()`, additive only —
-never `sync({ alter|force })`). To migrate manually instead, run from any
-machine with network access to the database:
+Migrations run exclusively via `npm run db:migrate` (additive only — never
+`sync({ alter|force })`). Render runs `npm run db:migrate && npm start`, so a
+migration failure already prevents startup; the server itself never applies
+migrations, it only verifies the schema is current at boot and refuses to
+start when behind. To migrate manually instead, run from any machine with
+network access to the database:
 
 ```bash
 DATABASE_URL='<external-url>' DB_SSL=true npm run db:migrate
@@ -328,6 +331,10 @@ allows `FRONTEND_URL` (default `http://localhost:4200` plus the production
   test database so it contains `test` (e.g. `dti_test`) and create it on the
   server, e.g.: `psql "$DATABASE_URL" -c 'CREATE DATABASE dti_test;'`.
 - **Port already in use**: another process on `PORT`? Change `PORT` in `.env`.
+- **Server exits with `Database schema is behind`**: the database was not
+  migrated (the server never migrates by itself). Run `npm run db:migrate`
+  first — on Render the start command already chains it
+  (`npm run db:migrate && npm start`).
 - **`relation "users" does not exist`**: run `npm run db:migrate`.
 - **npm 11 asks about install scripts**: `bcrypt`/`esbuild` are pre-approved
   via `allowScripts` in `package.json`, so `npm ci` works non-interactively.

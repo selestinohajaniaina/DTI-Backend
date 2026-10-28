@@ -1,20 +1,11 @@
-import { Sequelize } from 'sequelize';
 import { describe, expect, it, vi } from 'vitest';
-import { env } from '../src/config/env';
-import { findExtensionMismatch, runCommand } from '../src/scripts/migrate';
+import { findExtensionMismatch } from '../src/config/umzug';
+import { runCommand } from '../src/scripts/migrate';
+import { freshDb, historyNames, restoreMigratedState } from './db-helpers';
 import { testMigrations } from './migration-list';
 
 // Every test uses an isolated connection and leaves the shared test database
 // fully migrated, so this file is safe to run in any position of the suite.
-
-function freshDb(): Sequelize {
-  return new Sequelize(env.databaseUrl, { dialect: 'postgres', logging: false });
-}
-
-async function historyNames(db: Sequelize): Promise<string[]> {
-  const [rows] = await db.query('SELECT name FROM "SequelizeMeta" ORDER BY name;');
-  return (rows as { name: string }[]).map((row) => row.name);
-}
 
 function silencedErrors(): { spy: { mock: { calls: unknown[][] } }; restore: () => void } {
   const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -106,17 +97,7 @@ describe('runCommand', () => {
       await expect(db.authenticate()).rejects.toThrow();
     } finally {
       restore();
-      // Restore the pristine migrated state for the rest of the suite.
-      const restoreDb = freshDb();
-      try {
-        await restoreDb.query(
-          'DROP TABLE IF EXISTS "generated_ideas", "source_objects", "users" CASCADE;',
-        );
-        await restoreDb.query('DELETE FROM "SequelizeMeta";');
-        expect(await runCommand('up', restoreDb, testMigrations)).toBe(0);
-      } finally {
-        await restoreDb.close().catch(() => undefined);
-      }
+      await restoreMigratedState();
     }
   });
 
@@ -147,17 +128,7 @@ describe('runCommand', () => {
       }
     } finally {
       restore();
-      // Restore the pristine migrated state for the rest of the suite.
-      const restoreDb = freshDb();
-      try {
-        await restoreDb.query(
-          'DROP TABLE IF EXISTS "generated_ideas", "source_objects", "users" CASCADE;',
-        );
-        await restoreDb.query('DELETE FROM "SequelizeMeta";');
-        expect(await runCommand('up', restoreDb, testMigrations)).toBe(0);
-      } finally {
-        await restoreDb.close().catch(() => undefined);
-      }
+      await restoreMigratedState();
     }
   });
 

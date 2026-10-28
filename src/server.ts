@@ -1,8 +1,28 @@
 import { createApp } from './app';
 import { sequelize, waitForDatabase } from './config/database';
 import { env } from './config/env';
-import { createMigrator } from './config/umzug';
+import { findUncoveredMigrations, type InlineMigration } from './config/umzug';
 import { logger } from './utils/logger';
+
+/**
+ * Pre-listen startup checks. Migrations are applied exclusively by
+ * `npm run db:migrate` during deployment (Render runs it before `npm start`,
+ * so a migration failure already prevents startup); the server never applies
+ * migrations itself, it only verifies the schema is current and refuses to
+ * boot behind it. Exported for tests; `migrations` lets tests pass
+ * statically imported files (Umzug's glob cannot load raw `.ts` files under
+ * Vitest, so tests pass `tests/migration-list.ts`).
+ */
+export async function runStartupChecks(migrations?: InlineMigration[]): Promise<void> {
+  await waitForDatabase();
+  const uncovered = await findUncoveredMigrations(sequelize, migrations);
+  if (uncovered.length > 0) {
+    throw new Error(
+      `Database schema is behind by ${uncovered.length} migration(s) (${uncovered.join(', ')}). ` +
+        'Run `npm run db:migrate` before starting the server.',
+    );
+  }
+}
 
 async function main(): Promise<void> {
   logger.info('starting dti backend', { nodeEnv: env.nodeEnv, port: env.port });
@@ -17,11 +37,8 @@ async function main(): Promise<void> {
       host: env.host,
     });
   }
-  await waitForDatabase();
-
-  const migrator = createMigrator(sequelize);
-  const applied = await migrator.up();
-  logger.info('database migrations complete', { applied: applied.length });
+  await runStartupChecks();
+  logger.info('database schema verified up to date');
 
   const app = createApp();
   const server = app.listen(env.port, env.host, () => {
@@ -40,11 +57,23 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
-process.on('unhandledRejection', (reason: unknown) => {
-  logger.error('unhandled rejection', { error: reason });
-});
+// Importing this module (e.g. from tests) must not start the server.
+const invokedDirectly =
+  typeof require !== 'undefined' && typeof module !== 'undefined' && require.main === module;
+if (invokedDirectly) {
+  process.on('unhandledRejection', (reason: unknown) => {
+    logger.error('unhandled rejection', { error: reason });
+  });
 
-void main().catch((error: unknown) => {
-  logger.error('failed to start server', { error });
-  process.exitCode = 1;
-});
+  void main().catch((error: unknown) => {
+    logger.error('failed to start server', { error });
+    // Release pooled connections so a failed boot exits promptly instead of
+    // hanging on open handles (Render would only see a deploy timeout).
+    void sequelize
+      .close()
+      .catch(() => undefined)
+      .finally(() => {
+        process.exitCode = 1;
+      });
+  });
+}

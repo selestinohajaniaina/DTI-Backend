@@ -13,7 +13,7 @@
 
 ## Architecture réelle
 
-- `server.ts` : boot (env → attente DB → migrations → `listen` → arrêt gracieux SIGTERM/SIGINT).
+- `server.ts` : boot (env → attente DB → vérification lecture seule que le schéma est à jour, jamais d'application → `listen` → arrêt gracieux SIGTERM/SIGINT).
 - `app.ts` : fabrique Express sans `listen` (réutilisée par les tests).
 - Flux : `routes/` → `controllers/` (minces, `asyncHandler`, `sendSuccess`) → `services/` (logique) → `models/`.
 - `middlewares/` : `auth` (Bearer → `req.user` typé), `validate` (Zod remplace `req.body`), `request-logger` (path uniquement), `not-found`, `error` (central).
@@ -40,4 +40,4 @@
 - `npm run lint` / `lint:fix`, `npm run format` / `format:check`.
 - `npm test` / `test:watch` (base de test requise, suite séquentielle).
 - `npm run db:migrate` / `db:migrate:undo` / `db:migrate:status`, `npm run db:seed`.
-- Déploiement : sans Docker — `npm ci && npm run build` puis `npm start` (`NODE_ENV=production`) ; migrations automatiques au boot, manuelles via `DATABASE_URL='<url>' npm run db:migrate`.
+- Déploiement : sans Docker — `npm ci && npm run build` puis `npm run db:migrate && npm start` (`NODE_ENV=production`) ; seul `db:migrate` applique (jamais le boot, qui vérifie et refuse de démarrer si en retard) ; manuel via `DATABASE_URL='<url>' npm run db:migrate`.
