@@ -18,6 +18,11 @@ const booleanFromString = z
   .default('false')
   .transform((value) => value === 'true');
 
+const booleanFromStringDefaultTrue = z
+  .enum(['true', 'false'])
+  .default('true')
+  .transform((value) => value === 'true');
+
 const commaSeparatedUrls = z
   .string()
   .min(1)
@@ -46,7 +51,7 @@ function dbNameFromUrl(url: string): string | undefined {
   }
 }
 
-const envSchema = z
+export const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     PORT: z.coerce.number().int().min(1).max(65535).default(3000),
@@ -59,6 +64,12 @@ const envSchema = z
     DB_USER: z.string().min(1).optional(),
     DB_PASSWORD: z.string().optional(),
     DB_SSL: booleanFromString,
+    // Keep certificate verification ON by default. Set to "false" ONLY when
+    // the provider requires it: Render internal database URLs use self-signed
+    // certificates, so verification must be disabled there (Render docs:
+    // internal connections support `sslmode=require`, not verify-ca/verify-full).
+    // External connections with provider-managed certificates keep "true".
+    DB_SSL_REJECT_UNAUTHORIZED: booleanFromStringDefaultTrue,
     DB_LOGGING: booleanFromString,
     TEST_DATABASE_URL: z.string().min(1).optional(),
     JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters long'),
@@ -67,8 +78,8 @@ const envSchema = z
       .regex(expiresInPattern, 'JWT_EXPIRES_IN must look like "15m", "1h" or "3600"')
       .default('15m'),
     BCRYPT_ROUNDS: z.coerce.number().int().min(4).max(31).default(12),
-    // Optional: only POST /api/ai/test needs it. Empty string counts as unset
-    // so Compose can pass MODEL_API_KEY: ${MODEL_API_KEY:-} without breaking boot.
+    // Optional: only /api/ai/* routes need it. Empty string counts as unset
+    // so providers passing an empty MODEL_API_KEY do not break boot.
     MODEL_API_KEY: z
       .string()
       .optional()
@@ -147,6 +158,7 @@ export const env = {
     .filter((origin) => origin.length > 0),
   databaseUrl: resolveDatabaseUrl(values),
   dbSsl: values.DB_SSL,
+  dbSslRejectUnauthorized: values.DB_SSL_REJECT_UNAUTHORIZED,
   dbLogging: values.DB_LOGGING,
   jwtSecret: values.JWT_SECRET,
   jwtExpiresIn: values.JWT_EXPIRES_IN,

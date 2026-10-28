@@ -11,7 +11,6 @@
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
-    "dev:docker": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up --watch",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",

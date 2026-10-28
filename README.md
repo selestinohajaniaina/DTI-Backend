@@ -2,24 +2,23 @@
 
 Express + TypeScript backend foundation for **DTI (Don't Trash It)**, an AI-powered
 upcycling platform. This package contains the infrastructure only: HTTP server,
-PostgreSQL access, authentication primitives, migrations, tests, and Docker setup.
-AI integration and business features come later.
+PostgreSQL access, authentication primitives, migrations, tests, and AI routes.
+Business features come later.
 
 Frontend (Angular, untouched by this package): [`../DTI`](../DTI).
 
 ## Stack
 
-| Concern    | Choice                                                   |
-| ---------- | -------------------------------------------------------- |
-| Runtime    | Node.js 24 LTS (see `.nvmrc`), npm                       |
-| HTTP       | Express 5, Helmet, CORS                                  |
-| Language   | TypeScript (strict), ESLint, Prettier                    |
-| Database   | PostgreSQL 17 (Docker), Sequelize 6 (no decorators)      |
-| Migrations | Umzug (`src/migrations/*.ts`)                            |
-| Auth       | `jsonwebtoken` access tokens, `bcrypt` password hashing  |
-| Validation | Zod (env at startup, request bodies per route)           |
-| Tests      | Vitest + `light-my-request` against a real test database |
-| Containers | Multi-stage Dockerfile (non-root) + Docker Compose       |
+| Concern    | Choice                                                              |
+| ---------- | ------------------------------------------------------------------- |
+| Runtime    | Node.js 24 LTS (see `.nvmrc`), npm                                  |
+| HTTP       | Express 5, Helmet, CORS                                             |
+| Language   | TypeScript (strict), ESLint, Prettier                               |
+| Database   | External PostgreSQL via `DATABASE_URL`, Sequelize 6 (no decorators) |
+| Migrations | Umzug (`src/migrations/*.ts`)                                       |
+| Auth       | `jsonwebtoken` access tokens, `bcrypt` password hashing             |
+| Validation | Zod (env at startup, request bodies per route)                      |
+| Tests      | Vitest + `light-my-request` against a real test database            |
 
 ## Architecture
 
@@ -52,14 +51,15 @@ Notes on conventions:
 - Controllers never touch the database directly; services never touch HTTP.
 - No `sequelize.sync()` in the app: schema changes go through migrations only.
 - Migrations live under `src/` (not repo root) so `tsc` compiles them into
-  `dist/` and the production container can run them from compiled JS.
+  `dist/` and the production deploy can run them from compiled JS.
 - No refresh tokens yet: short-lived access tokens only (default 15 minutes).
   Refresh rotation can be added later with server-side reuse detection.
 
 ## Prerequisites
 
 - Node.js 24 LTS (`nvm use`, or match `.nvmrc`) and npm 10+.
-- Docker Engine + Docker Compose plugin (for PostgreSQL and container runs).
+- A reachable PostgreSQL instance: a managed provider (e.g. Render, Neon,
+  Supabase) or a local PostgreSQL server. No Docker required.
 - The Angular frontend runs separately on <http://localhost:4200> by default.
 
 ## Environment setup
@@ -67,7 +67,7 @@ Notes on conventions:
 ```bash
 cp .env.example .env
 cp .env.test.example .env.test
-# Edit both files: set POSTGRES_PASSWORD, JWT_SECRET (32+ chars), etc.
+# Edit both files: set DATABASE_URL, JWT_SECRET (32+ chars), etc.
 # Generate a secret: node -e "console.log(require('crypto').randomBytes(48).toString('base64'))"
 ```
 
@@ -82,11 +82,13 @@ string). Tests require `TEST_DATABASE_URL` pointing at a **dedicated database
 whose name contains `test`** — anything else is refused so the suite can never
 truncate dev/prod data.
 
-## Local development (DB in Docker, API on host)
+## Local development
+
+Point `DATABASE_URL` at any reachable PostgreSQL (managed provider or local
+server), then:
 
 ```bash
-npm install
-docker compose up -d db          # PostgreSQL on 127.0.0.1:5433
+npm ci
 npm run db:migrate                # create tables (also runs automatically on boot)
 npm run dev                       # API on http://127.0.0.1:3000 with live reload
 ```
@@ -94,37 +96,58 @@ npm run dev                       # API on http://127.0.0.1:3000 with live reloa
 Optional demo account: `npm run db:seed` creates `demo@dti.local / ChangeMe123!`
 (refused in production unless `ALLOW_SEED_IN_PRODUCTION=true`).
 
-## Containerized execution (API + DB in Docker)
+Stop the server with `Ctrl+C`.
+
+## Production build and deploy (Render)
+
+Build and run the compiled output with `NODE_ENV=production`:
 
 ```bash
-docker compose up --build        # API on http://localhost:3000
-docker compose up -d             # detached
-docker compose logs -f api       # follow API logs
-docker compose down              # stop; data is kept in the pgdata volume
+npm ci
+npm run build                     # tsc emit to dist/
+NODE_ENV=production npm start     # node dist/server.js
 ```
 
-The `api` service waits for the `db` healthcheck, runs pending migrations on
-boot, and runs as the non-root `node` user. Compose reads `.env` for
-interpolation; set `NODE_ENV=production` there for a production-like run.
-PostgreSQL is reachable from the host only via `127.0.0.1:5433` (service `db`
-itself is reachable as hostname `db` inside the private `backend` network).
+The server listens on `HOST` (defaults to `0.0.0.0`) and `PORT` (defaults to
+`3000`; Render injects its own `PORT`). Leave `HOST` unset on Render.
 
-## Containerized development with live reload (Compose Watch)
+Render web service settings (native Node runtime):
+
+- Build command: `npm ci && npm run build`
+- Start command: `npm start`
+- Health check path: `/api/health`
+
+Required environment variables on Render:
+
+| Variable                     | Value                                                       |
+| ---------------------------- | ----------------------------------------------------------- |
+| `NODE_ENV`                   | `production`                                                |
+| `DATABASE_URL`               | Render Postgres **internal** URL (auto-filled when linked)  |
+| `DB_SSL`                     | `true`                                                      |
+| `DB_SSL_REJECT_UNAUTHORIZED` | `false` (Render internal certs are self-signed — see below) |
+| `JWT_SECRET`                 | Random secret, 32+ characters                               |
+| `JWT_EXPIRES_IN`             | `15m` (optional, this is the default)                       |
+| `FRONTEND_URL`               | Production frontend origin(s), comma-separated              |
+| `MODEL_API_KEY`              | Meta API key (only needed for `/api/ai/*`)                  |
+
+TLS note: Render internal database connections use self-signed certificates
+(Render documents `sslmode=require`, with `verify-ca`/`verify-full`
+unsupported), so `DB_SSL_REJECT_UNAUTHORIZED=false` is required there. For
+external URLs or providers with valid certificates (Neon, Supabase, ...),
+keep the default `true` so certificates are verified.
+
+Migrations run automatically on every boot (`migrator.up()`, additive only —
+never `sync({ alter|force })`). To migrate manually instead, run from any
+machine with network access to the database:
 
 ```bash
-npm run dev:docker
-# equivalent: docker compose -f docker-compose.yml -f docker-compose.dev.yml up --watch
+DATABASE_URL='<external-url>' DB_SSL=true npm run db:migrate
 ```
 
-This builds the `development` image target (full dependencies + `tsx watch`)
-and starts Compose Watch: editing a file under `src/` (or `tests/`,
-`tsconfig.json`) syncs it into the container and tsx restarts the API
-automatically — no manual rebuild. `docker-compose.yml` is untouched, so plain
-`docker compose up --build` keeps running the production image.
-
-A rebuild happens automatically only when `package.json`, `package-lock.json`
-or the `Dockerfile` changes. Restart manually after editing other
-non-watched files (e.g. `.env`, `docker-compose.dev.yml` itself).
+Uploads note: generated images are stored on local disk under `UPLOAD_DIR`.
+On Render without a persistent disk, that directory is ephemeral and files
+disappear on redeploy — attach a disk or move to object storage if the
+generated images must survive restarts.
 
 ## Database
 
@@ -139,10 +162,8 @@ New migration: add `src/migrations/<timestamp>-<name>.ts` exporting `up`/`down`
 (Umzug style, see the initial `create-users` migration), then register it in
 `tests/setup.ts` so the suite can import it statically.
 
-Data lifecycle:
-
-- `docker compose down` keeps the `dti_pgdata` volume: data survives restarts.
-- Reset everything (destroys data): `docker compose down -v`.
+Data lifecycle: the database is managed by your PostgreSQL provider (backups,
+restores, and resets all happen there), never by this package.
 
 ## Testing, linting, build
 
@@ -255,30 +276,22 @@ token and attaching it as a Bearer header (an HTTP interceptor). CORS already
 allows `FRONTEND_URL` (default `http://localhost:4200`). Never expose
 `JWT_SECRET`, `DATABASE_URL`, or future AI provider keys to the browser.
 
-## Stopping and cleanup
-
-```bash
-docker compose stop        # pause containers, keep them
-docker compose down        # stop + remove containers, keep data volume
-docker compose down -v     # also delete the pgdata volume (data loss!)
-```
-
 ## Troubleshooting
 
 - **`Invalid environment configuration` on boot**: a required variable is
   missing or malformed; the message names each field (never values). Compare
   `.env` against `.env.example`.
-- **API can't reach the DB locally**: is `db` running? (`docker compose ps`;
-  expect `healthy`.) Local `DATABASE_URL` must use port `5433` (the Compose
-  host mapping), while the containerized API uses hostname `db`.
+- **API can't reach the DB**: check that `DATABASE_URL` points at a running,
+  reachable PostgreSQL and that the provider's firewall/IP allow-list permits
+  the connection. Managed providers require `DB_SSL=true`.
+- **TLS `self-signed certificate` errors on Render**: the internal database
+  URL needs `DB_SSL=true` with `DB_SSL_REJECT_UNAUTHORIZED=false` (Render's
+  internal certificates are self-signed). Never set that flag to `false`
+  for providers with valid certificates.
 - **`TEST_DATABASE_URL must point to a dedicated test database`**: rename the
-  test database so it contains `test` (e.g. `dti_test`) and create it:
-  `docker compose exec db psql -U dti -c 'CREATE DATABASE dti_test;'`.
-- **Port already in use**: another Postgres on `5433`? Change `DB_HOST_PORT`
-  in `.env` (and the `DATABASE_URL`/`TEST_DATABASE_URL` ports to match).
+  test database so it contains `test` (e.g. `dti_test`) and create it on the
+  server, e.g.: `psql "$DATABASE_URL" -c 'CREATE DATABASE dti_test;'`.
+- **Port already in use**: another process on `PORT`? Change `PORT` in `.env`.
 - **`relation "users" does not exist`**: run `npm run db:migrate`.
-- **Docker build fails on `bcrypt`**: the image uses Debian-slim
-  (`node:24-slim`) with prebuilt binaries; Alpine images would need a compiler
-  toolchain for the native module.
 - **npm 11 asks about install scripts**: `bcrypt`/`esbuild` are pre-approved
   via `allowScripts` in `package.json`, so `npm ci` works non-interactively.

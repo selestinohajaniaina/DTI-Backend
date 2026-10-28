@@ -13,7 +13,9 @@ export const sequelize = new Sequelize(env.databaseUrl, {
     acquire: 30000,
     idle: 10000,
   },
-  dialectOptions: env.dbSsl ? { ssl: { require: true, rejectUnauthorized: true } } : {},
+  dialectOptions: env.dbSsl
+    ? { ssl: { require: true, rejectUnauthorized: env.dbSslRejectUnauthorized } }
+    : {},
 });
 
 initModels(sequelize);
@@ -27,8 +29,8 @@ const STARTUP_ATTEMPTS = 10;
 const RETRY_DELAY_MS = 2000;
 
 /**
- * Waits for PostgreSQL during startup (covers container ordering races even
- * with a Compose healthcheck dependency). Throws after the attempts run out.
+ * Waits for PostgreSQL during startup (covers provider cold starts and
+ * deploy-time ordering races). Throws after the attempts run out.
  */
 export async function waitForDatabase(): Promise<void> {
   let lastError: unknown;

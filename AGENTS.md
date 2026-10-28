@@ -8,7 +8,7 @@
 ## Stack (vérifiée)
 
 - Node.js 24 LTS (`.nvmrc`), npm, Express 5, TypeScript 5.9 strict (CommonJS, **sans décorateurs**).
-- Sequelize 6 (classes explicites, **sans `sequelize-typescript`**) + `pg`, PostgreSQL 17 via Docker.
+- Sequelize 6 (classes explicites, **sans `sequelize-typescript`**) + `pg`, PostgreSQL externe via `DATABASE_URL` (sans Docker).
 - `jsonwebtoken` (access tokens courts), `bcrypt`, Zod, Umzug, `tsx` (dev), Vitest + `light-my-request` (tests).
 
 ## Architecture réelle
@@ -31,7 +31,7 @@
 - IA : transport partagé `services/meta.client.ts` (`fetch` natif, timeouts, erreurs 502/504, jamais de clé loguée) ; `services/ai.service.ts` (test texte) ; `services/ideas.service.ts` (Spark `json_schema` + 3 illustrations `muse-image-1.0` en parallèle avec photo en référence, échec par idée préservé) ; upload `multer` mémoire + magic bytes (`utils/image.ts`) ; images servies via `/uploads` (express.static).
 - Env : `DATABASE_URL` ou parties `DB_*`, `TEST_DATABASE_URL` (nom contenant `test`, garde anti dev/prod), `JWT_SECRET` 32+ caractères, `JWT_EXPIRES_IN`, `BCRYPT_ROUNDS`, `MODEL_API_KEY` (optionnel, requis pour `/api/ai/*`), `UPLOAD_DIR` (défaut `uploads`), `META_API_BASE` (override staging/mocks) ; `.env`/`.env.test` gitignorés ; secrets et clés IA exclusivement serveur.
 - Sécurité : Helmet, CORS sur `FRONTEND_URL`, JSON limité à 100kb, requêtes via l'ORM (paramétrées, jamais de SQL concaténé), pas de secrets/tokens/mots de passe dans les logs ; futures API externes appelées depuis le backend avec timeout et gestion d'erreurs.
-- Docker : `db` (healthcheck, volume `pgdata`, port hôte `127.0.0.1:5433`) + `api` (non-root, `depends_on` healthy, migrations au boot). Dev : `docker compose up -d db` + `npm run dev`. Ne pas monter le code source en production.
+- Base externe : PostgreSQL managé via `DATABASE_URL` (`DB_SSL=true` en production ; `DB_SSL_REJECT_UNAUTHORIZED=false` uniquement pour les URL internes Render, certificats auto-signés documentés). Dev : `npm run dev` directement. Prod : `NODE_ENV=production`, `npm run build` + `npm start`, écoute `0.0.0.0` sur `PORT`.
 
 ## Commandes (vérifiées, depuis `DTI-Backend/`)
 
@@ -39,4 +39,4 @@
 - `npm run lint` / `lint:fix`, `npm run format` / `format:check`.
 - `npm test` / `test:watch` (base de test requise, suite séquentielle).
 - `npm run db:migrate` / `db:migrate:undo` / `db:migrate:status`, `npm run db:seed`.
-- Conteneurs : `docker compose up --build`, `down` (garde les données), `down -v` (les détruit) ; dev avec rechargement : `npm run dev:docker` (overlay `docker-compose.dev.yml` + Watch, cible `development`, prod inchangée).
+- Déploiement : sans Docker — `npm ci && npm run build` puis `npm start` (`NODE_ENV=production`) ; migrations automatiques au boot, manuelles via `DATABASE_URL='<url>' npm run db:migrate`.
