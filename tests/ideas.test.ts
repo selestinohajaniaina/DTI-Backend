@@ -21,10 +21,9 @@ interface IdeasSuccessBody {
       image: { url: string | null; status: string };
       marketPrice: {
         status: string;
-        amount: null;
-        currency: null;
-        sourceUrl: null;
-        listingTitle: null;
+        currency: string;
+        estimatedCost: number | null;
+        estimatedSellingPrice: number | null;
       };
       tutorial: {
         materials: string[];
@@ -81,6 +80,7 @@ function sparkIdea(index: number): Record<string, unknown> {
     tutorialSteps: [{ step: 1, title: 'Do it', description: 'Do it well.' }],
     safetyNotes: [],
     imagePrompt: `Finished upcycled object ${index}, product photo`,
+    priceEstimate: { estimatedCost: 800 * index, estimatedSellingPrice: 3000 * index },
   };
 }
 
@@ -211,6 +211,7 @@ describe('POST /api/ai/generate-ideas', () => {
       apiKey: undefined,
       metaApiBase: 'https://api.meta.ai/v1',
       uploadDir: env.uploadDir,
+      ideasCount: env.generatedIdeasCount,
     }).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(AppError);
@@ -234,7 +235,12 @@ describe('POST /api/ai/generate-ideas', () => {
       expect(idea.ideaId).toEqual(expect.any(String));
       expect(idea.image.status).toBe('completed');
       expect(idea.image.url).toMatch(/^\/uploads\/generated\/idea-.*\.png$/);
-      expect(idea.marketPrice.status).toBe('not_found');
+      expect(idea.marketPrice).toEqual({
+        status: 'estimated',
+        currency: 'MGA',
+        estimatedCost: 800 * (index + 1),
+        estimatedSellingPrice: 3000 * (index + 1),
+      });
       expect(idea.tutorial.steps.length).toBeGreaterThan(0);
     }
     expect(res.body).not.toContain('Bearer');
@@ -264,6 +270,18 @@ describe('POST /api/ai/generate-ideas', () => {
     expect(raw).toContain('"type":"input_image"');
     expect(raw).toContain('data:image/jpeg;base64,');
     expect(raw).toContain('"type":"json_schema"');
+    expect(raw).toContain(`Generate exactly ${env.generatedIdeasCount} distinct`);
+    expect(raw).toContain(`"minItems":${env.generatedIdeasCount}`);
+    expect(raw).toContain(`"maxItems":${env.generatedIdeasCount}`);
+    expect(raw).toContain('priceEstimate');
+    expect(raw).toContain('estimatedCost');
+    expect(raw).toContain('estimatedSellingPrice');
+    expect(raw).toContain('MGA');
+    expect(raw).not.toContain('USD');
+    expect(raw).not.toContain('estimatedCostMGA');
+    expect(raw).not.toContain('estimatedSellingPriceMGA');
+    expect(raw).not.toContain('estimatedCostUSD');
+    expect(raw).not.toContain('estimatedSellingPriceUSD');
   });
 
   it('sends each idea with the original photo as edit reference', async () => {
@@ -306,14 +324,127 @@ describe('POST /api/ai/generate-ideas', () => {
     expect(ideas[2]?.image.status).toBe('completed');
   });
 
-  it('returns 502 on invalid model JSON or wrong idea count', async () => {
+  it('returns 502 on invalid model JSON', async () => {
     stubMeta({ ...sparkPayload([]), output: undefined, bogus: true }, () => imageB64Response());
-    expect((await postIdeas(TINY_PNG)).statusCode).toBe(502);
 
-    stubMeta(sparkPayload([sparkIdea(1), sparkIdea(2)]), () => imageB64Response());
     const res = await postIdeas(TINY_PNG);
+
     expect(res.statusCode).toBe(502);
     expect(parseJson<ErrorBody>(res).error.code).toBe('AI_UPSTREAM_ERROR');
+  });
+
+  it('returns the actual number of ideas when the model sends fewer than requested', async () => {
+    stubMeta(sparkPayload([sparkIdea(1), sparkIdea(2)]), () => imageB64Response());
+
+    const res = await postIdeas(TINY_PNG);
+
+    expect(res.statusCode).toBe(200);
+    const ideas = parseJson<IdeasSuccessBody>(res).data.ideas;
+    expect(ideas).toHaveLength(2);
+    expect(ideas.map((idea) => idea.id)).toEqual(['idea-1', 'idea-2']);
+  });
+
+  it('drops duplicate and invalid ideas without padding the result', async () => {
+    const duplicate = { ...sparkIdea(2), title: '  IDEA 1  ' };
+    const invalid = { ...sparkIdea(3), title: '' };
+    stubMeta(sparkPayload([sparkIdea(1), duplicate, invalid, sparkIdea(4)]), () =>
+      imageB64Response(),
+    );
+
+    const res = await postIdeas(TINY_PNG);
+
+    expect(res.statusCode).toBe(200);
+    const ideas = parseJson<IdeasSuccessBody>(res).data.ideas;
+    expect(ideas.map((idea) => idea.title)).toEqual(['Idea 1', 'Idea 4']);
+  });
+
+  it('returns 502 when no usable idea remains', async () => {
+    stubMeta(sparkPayload([{ ...sparkIdea(1), title: '' }]), () => imageB64Response());
+
+    const res = await postIdeas(TINY_PNG);
+
+    expect(res.statusCode).toBe(502);
+    expect(parseJson<ErrorBody>(res).error.code).toBe('AI_UPSTREAM_ERROR');
+  });
+
+  it('returns null estimates with estimated status instead of inventing values', async () => {
+    const withoutPrices = {
+      ...sparkIdea(1),
+      priceEstimate: { estimatedCost: null, estimatedSellingPrice: null },
+    };
+    stubMeta(sparkPayload([withoutPrices]), () => imageB64Response());
+
+    const res = await postIdeas(TINY_PNG);
+
+    expect(res.statusCode).toBe(200);
+    const ideas = parseJson<IdeasSuccessBody>(res).data.ideas;
+    expect(ideas).toHaveLength(1);
+    expect(ideas[0]?.marketPrice).toEqual({
+      status: 'estimated',
+      currency: 'MGA',
+      estimatedCost: null,
+      estimatedSellingPrice: null,
+    });
+  });
+
+  it('rounds fractional model prices to whole amounts', async () => {
+    const fractional = {
+      ...sparkIdea(1),
+      priceEstimate: { estimatedCost: 1247.6, estimatedSellingPrice: 2999.4 },
+    };
+    stubMeta(sparkPayload([fractional]), () => imageB64Response());
+
+    const res = await postIdeas(TINY_PNG);
+
+    expect(res.statusCode).toBe(200);
+    const ideas = parseJson<IdeasSuccessBody>(res).data.ideas;
+    expect(ideas).toHaveLength(1);
+    expect(ideas[0]?.marketPrice).toEqual({
+      status: 'estimated',
+      currency: 'MGA',
+      estimatedCost: 1248,
+      estimatedSellingPrice: 2999,
+    });
+  });
+
+  it('exposes no legacy price fields in the API contract', async () => {
+    stubMeta(sparkPayload([sparkIdea(1), sparkIdea(2), sparkIdea(3)]), () => imageB64Response());
+
+    const res = await postIdeas(TINY_PNG);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.body).not.toContain('estimatedCostMGA');
+    expect(res.body).not.toContain('estimatedSellingPriceMGA');
+    expect(res.body).not.toContain('estimatedCostUSD');
+    expect(res.body).not.toContain('estimatedSellingPriceUSD');
+    expect(res.body).not.toContain('"unavailable"');
+    expect(res.body).not.toContain('not_found');
+    expect(res.body).not.toContain('"amount"');
+  });
+
+  it('requests a custom idea count end to end', async () => {
+    const mock = stubMeta(
+      sparkPayload([sparkIdea(1), sparkIdea(2), sparkIdea(3), sparkIdea(4)]),
+      () => imageB64Response(),
+    );
+
+    const result = await generateIdeasFromPhoto(TINY_PNG, {
+      apiKey: 'test-key',
+      metaApiBase: 'https://api.meta.ai/v1',
+      uploadDir: env.uploadDir,
+      ideasCount: 2,
+    });
+
+    expect(result.ideas).toHaveLength(2);
+    const call = mock.mock.calls.find(([input]) => requestUrl(input).endsWith('/responses'));
+    const raw = typeof call?.[1]?.body === 'string' ? call[1].body : '{}';
+    expect(raw).toContain('Generate exactly 2 distinct');
+    expect(raw).toContain('"minItems":2');
+    expect(raw).toContain('"maxItems":2');
+    const editCalls = mock.mock.calls.filter(([input]) =>
+      requestUrl(input).endsWith('/images/edits'),
+    );
+    expect(editCalls).toHaveLength(2);
   });
 
   it('returns 502 when Meta responds with an error', async () => {

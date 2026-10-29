@@ -26,11 +26,17 @@ const SPARK_TIMEOUT_MS = 180_000;
 const IMAGE_TIMEOUT_MS = 180_000;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
-const DTI_SYSTEM_PROMPT = `You are DTI (Don't Trash It), an expert in creative upcycling, practical reuse, sustainable design, and beginner-friendly DIY projects.
+const PRICE_GUIDANCE = `Price estimate (Malagasy Ariary — MGA, whole amounts):
+- estimatedCost: a rough, easy-to-understand estimate of what it would cost to make the product (materials plus a share of the assembly effort).
+- estimatedSellingPrice: a rough, easy-to-understand estimate of what the finished item could sell for on the Malagasy market.
+Keep both plausible and familiar: round whole amounts such as 800, 1500, or 3000 — never precise-looking figures such as 1247. Base them on the required materials, the manufacturing or assembly cost, and the time and complexity involved. These are approximate estimates, never verified market prices or guaranteed profits. If you cannot estimate a reasonable price, return null for that field rather than inventing one. Do not invent listings, sellers, URLs, or claims of online research.`;
+
+function buildSystemPrompt(ideasCount: number): string {
+  return `You are DTI (Don't Trash It), an expert in creative upcycling, practical reuse, sustainable design, and beginner-friendly DIY projects.
 
 Analyze the uploaded photograph and identify the main discarded object, its likely material, visible condition, and relevant physical characteristics.
 
-Generate exactly three distinct, realistic, safe, and useful ideas for transforming this object into new everyday items.
+Generate exactly ${ideasCount} distinct, realistic, safe, and useful ideas for transforming this object into new everyday items.
 
 Prioritize ideas that:
 - Can genuinely be made from the photographed object.
@@ -39,86 +45,122 @@ Prioritize ideas that:
 - Are meaningfully different from each other.
 - Avoid unnecessary complexity and unsafe transformations.
 
-For each idea, provide an appealing English title, a short emotionally engaging description, the intended use, additional materials, required tools, difficulty, estimated crafting time, detailed beginner-friendly tutorial steps, safety precautions, and an English image-generation prompt.
+For each idea, provide an appealing English title, a short emotionally engaging description, the intended use, additional materials, required tools, difficulty, estimated crafting time, detailed beginner-friendly tutorial steps, safety precautions, an English image-generation prompt, and a price estimate.
 
-Do not invent market prices, listings, sellers, URLs, or claims of online research. If no verified price information is supplied, indicate that no verified market price is available.
+${PRICE_GUIDANCE}
 
 Return only valid JSON matching the required response schema. Do not include Markdown or additional commentary.`;
+}
 
 // Strict-subset compliant: root object, additionalProperties:false on every
 // object, required lists every key. Sent via text.format (Responses API).
-const IDEAS_JSON_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['sourceObject', 'ideas'],
-  properties: {
-    sourceObject: {
-      type: 'object',
-      additionalProperties: false,
-      required: ['name', 'material', 'condition'],
-      properties: {
-        name: { type: 'string', minLength: 1 },
-        material: { type: 'string', minLength: 1 },
-        condition: { type: 'string', minLength: 1 },
-      },
-    },
-    ideas: {
-      type: 'array',
-      minItems: 3,
-      maxItems: 3,
-      items: {
+// The price fields use standard `['integer', 'null']` unions (no request
+// sets `strict: true`, so the schema is accepted as-is and output stays
+// schema-constrained). Whole Malagasy Ariary (MGA) amounts only.
+const MAX_PRICE_MGA = 100_000_000;
+
+function buildIdeasJsonSchema(ideasCount: number): Record<string, unknown> {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: ['sourceObject', 'ideas'],
+    properties: {
+      sourceObject: {
         type: 'object',
         additionalProperties: false,
-        required: [
-          'title',
-          'description',
-          'intendedUse',
-          'additionalMaterials',
-          'tools',
-          'difficulty',
-          'estimatedMinutes',
-          'tutorialSteps',
-          'safetyNotes',
-          'imagePrompt',
-        ],
+        required: ['name', 'material', 'condition'],
         properties: {
-          title: { type: 'string', minLength: 1 },
-          description: { type: 'string', minLength: 1 },
-          intendedUse: { type: 'string', minLength: 1 },
-          additionalMaterials: {
-            type: 'array',
-            minItems: 1,
-            items: { type: 'string', minLength: 1 },
-          },
-          tools: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
-          difficulty: { type: 'string', enum: ['Easy', 'Medium', 'Hard'] },
-          estimatedMinutes: { type: 'integer', minimum: 1, maximum: 1440 },
-          tutorialSteps: {
-            type: 'array',
-            minItems: 1,
-            items: {
+          name: { type: 'string', minLength: 1 },
+          material: { type: 'string', minLength: 1 },
+          condition: { type: 'string', minLength: 1 },
+        },
+      },
+      ideas: {
+        type: 'array',
+        minItems: ideasCount,
+        maxItems: ideasCount,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: [
+            'title',
+            'description',
+            'intendedUse',
+            'additionalMaterials',
+            'tools',
+            'difficulty',
+            'estimatedMinutes',
+            'tutorialSteps',
+            'safetyNotes',
+            'imagePrompt',
+            'priceEstimate',
+          ],
+          properties: {
+            title: { type: 'string', minLength: 1 },
+            description: { type: 'string', minLength: 1 },
+            intendedUse: { type: 'string', minLength: 1 },
+            additionalMaterials: {
+              type: 'array',
+              minItems: 1,
+              items: { type: 'string', minLength: 1 },
+            },
+            tools: { type: 'array', minItems: 1, items: { type: 'string', minLength: 1 } },
+            difficulty: { type: 'string', enum: ['Easy', 'Medium', 'Hard'] },
+            estimatedMinutes: { type: 'integer', minimum: 1, maximum: 1440 },
+            tutorialSteps: {
+              type: 'array',
+              minItems: 1,
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                required: ['step', 'title', 'description'],
+                properties: {
+                  step: { type: 'integer', minimum: 1 },
+                  title: { type: 'string', minLength: 1 },
+                  description: { type: 'string', minLength: 1 },
+                },
+              },
+            },
+            safetyNotes: { type: 'array', items: { type: 'string' } },
+            imagePrompt: { type: 'string', minLength: 1 },
+            priceEstimate: {
               type: 'object',
               additionalProperties: false,
-              required: ['step', 'title', 'description'],
+              required: ['estimatedCost', 'estimatedSellingPrice'],
               properties: {
-                step: { type: 'integer', minimum: 1 },
-                title: { type: 'string', minLength: 1 },
-                description: { type: 'string', minLength: 1 },
+                estimatedCost: { type: ['integer', 'null'], minimum: 0, maximum: MAX_PRICE_MGA },
+                estimatedSellingPrice: {
+                  type: ['integer', 'null'],
+                  minimum: 0,
+                  maximum: MAX_PRICE_MGA,
+                },
               },
             },
           },
-          safetyNotes: { type: 'array', items: { type: 'string' } },
-          imagePrompt: { type: 'string', minLength: 1 },
         },
       },
     },
-  },
-};
+  };
+}
 
 const tutorialStepSchema = z.object({
   step: z.number().int().min(1),
   title: z.string().trim().min(1).max(200),
   description: z.string().trim().min(1).max(2000),
+});
+
+// The model is asked for whole amounts; round defensively so 1247.6 becomes
+// 1248 instead of discarding an otherwise valid idea.
+const wholeAmount = z
+  .number()
+  .min(0)
+  .max(MAX_PRICE_MGA)
+  .nullable()
+  .transform((value) => (value === null ? null : Math.round(value)));
+
+const priceEstimateSchema = z.object({
+  estimatedCost: wholeAmount,
+  estimatedSellingPrice: wholeAmount,
 });
 
 const rawIdeaSchema = z.object({
@@ -132,31 +174,87 @@ const rawIdeaSchema = z.object({
   tutorialSteps: z.array(tutorialStepSchema).min(1).max(30),
   safetyNotes: z.array(z.string().trim().max(300)).max(30),
   imagePrompt: z.string().trim().min(1).max(1200),
+  priceEstimate: priceEstimateSchema,
 });
 
-const sparkOutputSchema = z.object({
-  sourceObject: z.object({
-    name: z.string().trim().min(1).max(120),
-    material: z.string().trim().min(1).max(120),
-    condition: z.string().trim().min(1).max(120),
-  }),
-  ideas: z.array(rawIdeaSchema).length(3),
+const sourceObjectSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  material: z.string().trim().min(1).max(120),
+  condition: z.string().trim().min(1).max(120),
 });
 
-type SparkOutput = z.infer<typeof sparkOutputSchema>;
-type RawIdea = SparkOutput['ideas'][number];
+// Root shape only; ideas are validated item by item so one bad entry cannot
+// discard the whole response (see parseSparkOutput).
+const sparkRootSchema = z.object({
+  sourceObject: sourceObjectSchema,
+  ideas: z.array(z.unknown()),
+});
+
+type RawIdea = z.infer<typeof rawIdeaSchema>;
+
+interface ParsedSparkOutput {
+  sourceObject: z.infer<typeof sourceObjectSchema>;
+  ideas: RawIdea[];
+}
+
+/**
+ * Validates the model's JSON, keeping every usable idea: entries are checked
+ * individually, duplicates (case-insensitive title match) are dropped, and
+ * the result is capped at the requested count. Returns undefined when
+ * nothing usable remains. Never pads or duplicates entries to reach the
+ * requested count.
+ */
+function parseSparkOutput(data: unknown, ideasCount: number): ParsedSparkOutput | undefined {
+  const root = sparkRootSchema.safeParse(data);
+  if (!root.success) {
+    return undefined;
+  }
+  const seenTitles = new Set<string>();
+  const ideas: RawIdea[] = [];
+  let dropped = 0;
+  for (const candidate of root.data.ideas) {
+    if (ideas.length >= ideasCount) {
+      break;
+    }
+    const item = rawIdeaSchema.safeParse(candidate);
+    if (!item.success) {
+      dropped += 1;
+      continue;
+    }
+    const key = item.data.title.trim().toLowerCase();
+    if (seenTitles.has(key)) {
+      dropped += 1;
+      continue;
+    }
+    seenTitles.add(key);
+    ideas.push(item.data);
+  }
+  if (ideas.length === 0) {
+    return undefined;
+  }
+  if (ideas.length < ideasCount) {
+    logger.warn('meta returned fewer valid ideas than requested', {
+      requested: ideasCount,
+      valid: ideas.length,
+      dropped,
+    });
+  }
+  return { sourceObject: root.data.sourceObject, ideas };
+}
 
 export interface GeneratedIdeaImage {
   url: string | null;
   status: 'completed' | 'failed';
 }
 
-export interface MarketPriceInfo {
-  status: 'not_found';
-  amount: null;
-  currency: null;
-  sourceUrl: null;
-  listingTitle: null;
+export interface PriceEstimate {
+  estimatedCost: number | null;
+  estimatedSellingPrice: number | null;
+}
+
+export interface MarketPriceInfo extends PriceEstimate {
+  status: 'estimated';
+  currency: 'MGA';
 }
 
 export interface IdeaTutorialStep {
@@ -192,11 +290,16 @@ export interface IdeasDeps {
   apiKey: string | undefined;
   metaApiBase: string;
   uploadDir: string;
+  /** Ideas requested from the model (validated `GENERATED_IDEAS_COUNT`). */
+  ideasCount: number;
   /**
-   * When provided, the generation is persisted (source object + three ideas
-   * in one transaction) and database IDs are merged into the result.
+   * When provided, the generation is persisted (source object plus every
+   * valid idea in one transaction) and database IDs are merged into the
+   * result.
    */
   ownership?: GenerationOwnership;
+  /** Aborts in-flight Meta requests (client disconnect). Never retried. */
+  signal?: AbortSignal;
 }
 
 /** Public result plus database IDs; anonymousOwnerId is null for signed-in callers. */
@@ -211,15 +314,16 @@ export const UPLOADS_URL_PREFIX = '/uploads/';
 
 const SOURCE_IMAGES_DIR = 'source';
 
-const NO_MARKET_PRICE: MarketPriceInfo = {
-  status: 'not_found',
-  amount: null,
-  currency: null,
-  sourceUrl: null,
-  listingTitle: null,
-};
-
 const FAILED_IMAGE: GeneratedIdeaImage = { url: null, status: 'failed' };
+
+function toMarketPrice(estimate: PriceEstimate): MarketPriceInfo {
+  return {
+    status: 'estimated',
+    currency: 'MGA',
+    estimatedCost: estimate.estimatedCost,
+    estimatedSellingPrice: estimate.estimatedSellingPrice,
+  };
+}
 
 function parseModelJson(text: string): unknown {
   // json_schema mode returns raw JSON; strip fences defensively anyway.
@@ -264,6 +368,8 @@ async function generateAndStoreImage(
   deps: IdeasDeps,
   apiKey: string,
 ): Promise<string> {
+  // One retry for no-response failures and rate limits only: a 5xx may
+  // already have generated (and billed) an image, so it is never retried.
   const payload = await postMetaJson(
     deps.metaApiBase,
     '/images/edits',
@@ -275,6 +381,12 @@ async function generateAndStoreImage(
     },
     apiKey,
     IMAGE_TIMEOUT_MS,
+    {
+      operation: 'generate-image',
+      signal: deps.signal,
+      maxRetries: 1,
+      retryServerError: false,
+    },
   );
   const image = firstImageBytes(payload);
   if (!image) {
@@ -283,7 +395,10 @@ async function generateAndStoreImage(
   const bytes =
     image.kind === 'b64'
       ? Buffer.from(image.data, 'base64')
-      : await downloadImage(image.url, IMAGE_TIMEOUT_MS, MAX_IMAGE_BYTES);
+      : await downloadImage(image.url, IMAGE_TIMEOUT_MS, MAX_IMAGE_BYTES, {
+          operation: 'download-image',
+          signal: deps.signal,
+        });
   const kind = detectImageKind(bytes);
   if (!kind || bytes.length === 0 || bytes.length > MAX_IMAGE_BYTES) {
     throw new Error('Meta returned an unusable image');
@@ -326,12 +441,15 @@ export async function generateIdeasFromPhoto(
     '/responses',
     {
       model: SPARK_MODEL,
-      instructions: DTI_SYSTEM_PROMPT,
+      instructions: buildSystemPrompt(deps.ideasCount),
       input: [
         {
           role: 'user',
           content: [
-            { type: 'input_text', text: 'Analyze this photo and generate three upcycling ideas.' },
+            {
+              type: 'input_text',
+              text: `Analyze this photo and generate ${deps.ideasCount} upcycling ideas.`,
+            },
             { type: 'input_image', image_url: referenceDataUrl },
           ],
         },
@@ -340,12 +458,13 @@ export async function generateIdeasFromPhoto(
         format: {
           type: 'json_schema',
           name: 'upcycling_ideas',
-          schema: IDEAS_JSON_SCHEMA,
+          schema: buildIdeasJsonSchema(deps.ideasCount),
         },
       },
     },
     apiKey,
     SPARK_TIMEOUT_MS,
+    { operation: 'generate-ideas', signal: deps.signal },
   );
   assertResponseCompleted(sparkPayload);
 
@@ -354,13 +473,11 @@ export async function generateIdeasFromPhoto(
     logger.warn('meta ai returned no text output', { model: SPARK_MODEL });
     throw new AppError(502, 'AI_UPSTREAM_ERROR', 'Meta AI returned no text output');
   }
-  const parsed = sparkOutputSchema.safeParse(parseModelJson(answerText));
-  if (!parsed.success) {
-    // Model text only (no secrets): safe to log a sample for debugging.
-    logger.warn('meta ideas failed validation', { issues: parsed.error.issues.slice(0, 3) });
+  const sparkOutput = parseSparkOutput(parseModelJson(answerText), deps.ideasCount);
+  if (!sparkOutput) {
+    logger.warn('meta ideas failed validation', { requested: deps.ideasCount });
     throw new AppError(502, 'AI_UPSTREAM_ERROR', 'Meta returned an unusable response');
   }
-  const sparkOutput: SparkOutput = parsed.data;
 
   const images = await Promise.all(
     sparkOutput.ideas.map((idea: RawIdea, index: number) =>
@@ -386,7 +503,7 @@ export async function generateIdeasFromPhoto(
         difficulty: idea.difficulty,
         estimatedMinutes: idea.estimatedMinutes,
         image: generated,
-        marketPrice: NO_MARKET_PRICE,
+        marketPrice: toMarketPrice(idea.priceEstimate),
         tutorial: {
           materials: idea.additionalMaterials,
           tools: idea.tools,
@@ -417,7 +534,7 @@ export async function generateIdeasFromPhoto(
 interface PersistGenerationInput {
   photo: Buffer;
   kind: SupportedImageKind;
-  sparkOutput: SparkOutput;
+  sparkOutput: ParsedSparkOutput;
   ideas: GeneratedIdea[];
   images: GeneratedIdeaImage[];
   ownership: GenerationOwnership;
@@ -436,34 +553,23 @@ function toStorageKey(publicUrl: string | null): string | null {
 }
 
 /**
- * Stores the source photo on disk, then the source object and its three
- * ideas in a single transaction (a failure rolls everything back). Only
+ * Stores the source photo on disk, then the source object and every valid
+ * idea in a single transaction (a failure rolls everything back). Only
  * storage keys are persisted, never image bytes or credentials.
  */
 async function persistGeneration(input: PersistGenerationInput): Promise<PersistedIdeasResult> {
-  const [raw0, raw1, raw2] = input.sparkOutput.ideas;
-  const [idea0, idea1, idea2] = input.ideas;
-  const [image0, image1, image2] = input.images;
-  if (
-    !raw0 ||
-    !raw1 ||
-    !raw2 ||
-    !idea0 ||
-    !idea1 ||
-    !idea2 ||
-    !image0 ||
-    !image1 ||
-    !image2 ||
-    input.sparkOutput.ideas.length !== 3
-  ) {
-    // Unreachable: the Spark schema enforces exactly three ideas.
-    throw new Error('Cannot persist a generation without exactly three ideas');
+  const aligned = input.sparkOutput.ideas.map((raw, index) => {
+    const idea = input.ideas[index];
+    const image = input.images[index];
+    if (!idea || !image) {
+      // Unreachable: all three arrays are built from the same parsed ideas.
+      throw new Error('Cannot persist misaligned generation results');
+    }
+    return { raw, idea, image };
+  });
+  if (aligned.length === 0) {
+    throw new Error('Cannot persist a generation without ideas');
   }
-  const aligned = [
-    { raw: raw0, idea: idea0, image: image0 },
-    { raw: raw1, idea: idea1, image: image1 },
-    { raw: raw2, idea: idea2, image: image2 },
-  ];
 
   const dir = path.join(input.uploadDir, SOURCE_IMAGES_DIR);
   await fs.mkdir(dir, { recursive: true });
@@ -498,25 +604,26 @@ async function persistGeneration(input: PersistGenerationInput): Promise<Persist
         safetyNotes: raw.safetyNotes,
         imagePath: toStorageKey(image.url),
         imageStatus: image.status,
-        marketPrice: { ...NO_MARKET_PRICE },
+        marketPrice: toMarketPrice(raw.priceEstimate),
       })),
       { transaction: t },
     );
-    const [row0, row1, row2] = rows;
-    if (!row0 || !row1 || !row2 || rows.length !== 3) {
+    if (rows.length !== aligned.length) {
       throw new Error('Idea persistence returned an unexpected row count');
     }
-    return { source, ideaIds: [row0.id, row1.id, row2.id] as [string, string, string] };
+    return { source, rows };
   });
 
   return {
     sourceObject: { id: persisted.source.id, ...input.sparkOutput.sourceObject },
-    // Literal tuple indexes stay total under noUncheckedIndexedAccess.
-    ideas: [
-      { ...idea0, ideaId: persisted.ideaIds[0] },
-      { ...idea1, ideaId: persisted.ideaIds[1] },
-      { ...idea2, ideaId: persisted.ideaIds[2] },
-    ],
+    ideas: aligned.map(({ idea }, index) => {
+      const row = persisted.rows[index];
+      if (!row) {
+        // Unreachable: the row count was verified above.
+        throw new Error('Idea persistence returned an unexpected row count');
+      }
+      return { ...idea, ideaId: row.id };
+    }),
     anonymousOwnerId:
       input.ownership.kind === 'anonymous' ? input.ownership.anonymousOwnerId : null,
   };

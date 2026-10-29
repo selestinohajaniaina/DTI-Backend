@@ -198,7 +198,7 @@ Base URL (dev): `http://127.0.0.1:3000`
 | POST   | `/api/auth/login`        | no     | Login; 200 `{ user, token }`                                         |
 | GET    | `/api/auth/me`           | Bearer | Current user; 401 without valid JWT                                  |
 | POST   | `/api/ai/test`           | Bearer | Meta AI test prompt; 200 `{ model, answer }`                         |
-| POST   | `/api/ai/generate-ideas` | no     | Photo-to-ideas (multipart `image`); 200 `{ sourceObject, ideas[3] }` |
+| POST   | `/api/ai/generate-ideas` | no     | Photo-to-ideas (multipart `image`); 200 `{ sourceObject, ideas[N] }` |
 
 Sample requests:
 
@@ -240,13 +240,47 @@ Without a key the route answers `503 AI_NOT_CONFIGURED`. Meta failures map to
 `502 AI_UPSTREAM_ERROR` (or `504 AI_TIMEOUT`) without leaking internals. The
 key travels in the server-side `Authorization` header only.
 
+### Meta connection resilience
+
+Every Meta call runs with a per-attempt timeout (30 s for `/api/ai/test`,
+180 s per generation phase) and a small bounded retry policy:
+
+- Transient network failures (`ETIMEDOUT`, `ECONNRESET`, …) and our own
+  timeouts are retried with exponential backoff and jitter.
+- HTTP `429` is retried honoring `Retry-After` (capped at 30 s); HTTP
+  `408`/`5xx` are retried for text calls.
+- HTTP `400`/`401`/`403`/`404`, DNS `ENOTFOUND` and TLS errors fail fast.
+- Image generation retries at most once, and never on `5xx` (the image may
+  already have been generated and billed).
+- Disconnecting the HTTP client aborts in-flight Meta requests including
+  backoff waits (`499 AI_CANCELLED`, only visible server-side).
+
+Failure logs carry `operation`, `phase` (`connection` vs `response`),
+`status`, network `codes` and attempt counts — never keys, headers or
+image bytes — and the original error is preserved as the `AppError`
+cause for diagnosis.
+
 ### Upcycling ideas (prototype)
 
 `POST /api/ai/generate-ideas` accepts `multipart/form-data` with an `image`
 field (JPEG/PNG/WebP/GIF verified by magic bytes, 10 MB max) and returns
-`{ sourceObject, ideas[3] }`: title, description, difficulty, estimated
-minutes, tutorial (materials, tools, steps, safety notes), market price
-(always `not_found` for now — no fake research), and an illustration per idea.
+`{ sourceObject, ideas[N] }`: title, description, difficulty, estimated
+minutes, tutorial (materials, tools, steps, safety notes), an AI-estimated
+price in MGA (Malagasy Ariary), and an illustration per idea.
+
+The model is asked for `GENERATED_IDEAS_COUNT` ideas (default 5, max 10);
+fewer are returned when the model sends fewer valid, distinct entries.
+Each idea carries the standardized `marketPrice: { status: "estimated",
+currency: "MGA", estimatedCost, estimatedSellingPrice }`, where either
+amount is a whole ariary number or `null` when the model cannot estimate
+it reliably. API consumers format amounts for display from the `currency`
+field (e.g. `Ar 3,000`). These are rough AI estimates, never verified
+market prices or guaranteed profits. Rows stored with older shapes (the
+`{ status: "not_found", ... }` prototype shape or the briefly used
+`estimatedCostMGA`/`estimatedCostUSD` estimate shapes) remain readable via
+the `StoredMarketPrice` union and are mapped to the canonical contract by
+`normalizeStoredMarketPrice()` at read time; no data migration was needed
+(schemaless JSONB column, production data untouched).
 
 ```bash
 curl -X POST http://127.0.0.1:3000/api/ai/generate-ideas \
@@ -262,9 +296,9 @@ other ideas. The route is intentionally public for the anonymous demo;
 add auth + rate limiting before any public exposure.
 
 Persistence: every successful generation stores one `source_objects` row
-(original photo key, detected name/material/condition) plus three
-`generated_ideas` rows (tutorial, safety notes, market price, image
-key/status) in a single transaction. Signed-in callers (optional
+(original photo key, detected name/material/condition) plus one
+`generated_ideas` row per valid idea (tutorial, safety notes, price
+estimate, image key/status) in a single transaction. Signed-in callers (optional
 `Authorization: Bearer` header) are recorded via `ownerId`; anonymous
 callers are grouped by `anonymousOwnerId`, taken from the
 `X-Anonymous-Owner-Id` header when it holds a valid UUID and

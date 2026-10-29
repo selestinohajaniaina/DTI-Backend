@@ -204,18 +204,26 @@ describe('POST /api/ai/test', () => {
     expect(parseJson<ErrorBody>(res).error.code).toBe('AI_UPSTREAM_ERROR');
   });
 
-  it('returns 504 on timeout', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi
-        .fn<typeof fetch>()
-        .mockRejectedValue(new DOMException('The operation timed out', 'AbortError')),
-    );
+  it('retries a transient Meta failure before succeeding', async () => {
+    // Timeout mapping itself is covered in tests/meta.client.test.ts with a
+    // real aborting signal; a bare AbortError with live signals is not a
+    // timeout and now maps to 502 instead of 504.
     const token = await registerAndGetToken();
+    const transient = new TypeError('fetch failed', {
+      cause: new AggregateError(
+        [Object.assign(new Error('connect ETIMEDOUT 93.184.216.34:443'), { code: 'ETIMEDOUT' })],
+        'fetch failed',
+      ),
+    });
+    const mock = stubFetchJson(
+      metaResponse([messageItem([{ type: 'output_text', text: 'Reuse it!' }])]),
+    );
+    mock.mockRejectedValueOnce(transient);
 
     const res = await postAiTest(token);
 
-    expect(res.statusCode).toBe(504);
-    expect(parseJson<ErrorBody>(res).error.code).toBe('AI_TIMEOUT');
+    expect(mock).toHaveBeenCalledTimes(2);
+    expect(res.statusCode).toBe(200);
+    expect(parseJson<AiSuccessBody>(res).data.answer).toBe('Reuse it!');
   });
 });

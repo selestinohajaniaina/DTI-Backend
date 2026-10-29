@@ -5,7 +5,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { env } from '../src/config/env';
 import { SPARK_MODEL } from '../src/services/ideas.service';
 import { signAccessToken } from '../src/utils/jwt';
-import { GeneratedIdea } from '../src/models/generated-idea.model';
+import { GeneratedIdea, normalizeStoredMarketPrice } from '../src/models/generated-idea.model';
 import { SourceObject } from '../src/models/source-object.model';
 import { app, parseJson, registerAndGetToken } from './helpers';
 
@@ -20,10 +20,9 @@ interface PersistBody {
       image: { url: string | null; status: string };
       marketPrice: {
         status: string;
-        amount: null;
-        currency: null;
-        sourceUrl: null;
-        listingTitle: null;
+        currency: string;
+        estimatedCost: number | null;
+        estimatedSellingPrice: number | null;
       };
       tutorial: {
         materials: string[];
@@ -48,10 +47,10 @@ const TINY_PNG = Buffer.from(
 );
 const ANON_ID = '123e4567-e89b-12d3-a456-426614174000';
 
-function sparkBody(): Record<string, unknown> {
+function sparkBody(ideaIndexes: number[] = [1, 2, 3]): Record<string, unknown> {
   const text = JSON.stringify({
     sourceObject: { name: 'Cup', material: 'plastic', condition: 'reusable' },
-    ideas: [1, 2, 3].map((index) => ({
+    ideas: ideaIndexes.map((index) => ({
       title: `Idea ${index}`,
       description: `Description ${index}`,
       intendedUse: `Use ${index}`,
@@ -62,6 +61,10 @@ function sparkBody(): Record<string, unknown> {
       tutorialSteps: [{ step: 1, title: 'Do it', description: 'Do it well.' }],
       safetyNotes: ['Wear gloves'],
       imagePrompt: `Finished upcycled object ${index}, product photo`,
+      priceEstimate: {
+        estimatedCost: 800 * index,
+        estimatedSellingPrice: 3000 * index,
+      },
     })),
   });
   return {
@@ -92,13 +95,16 @@ function requestUrl(input: string | URL | Request): string {
   return input instanceof URL ? input.toString() : input.url;
 }
 
-function stubMeta(imageBehavior: (callIndex: number) => unknown): void {
+function stubMeta(
+  imageBehavior: (callIndex: number) => unknown,
+  ideaIndexes: number[] = [1, 2, 3],
+): void {
   let imageCalls = 0;
   const mock = vi.fn<typeof fetch>().mockImplementation((input) => {
     const url = requestUrl(input);
     if (url.endsWith('/responses')) {
       return Promise.resolve(
-        new Response(JSON.stringify(sparkBody()), {
+        new Response(JSON.stringify(sparkBody(ideaIndexes)), {
           status: 200,
           headers: { 'Content-Type': 'application/json' },
         }),
@@ -180,11 +186,10 @@ describe('POST /api/ai/generate-ideas persistence', () => {
     expect(first?.tutorialSteps).toEqual([{ step: 1, title: 'Do it', description: 'Do it well.' }]);
     expect(first?.safetyNotes).toEqual(['Wear gloves']);
     expect(first?.marketPrice).toEqual({
-      status: 'not_found',
-      amount: null,
-      currency: null,
-      sourceUrl: null,
-      listingTitle: null,
+      status: 'estimated',
+      currency: 'MGA',
+      estimatedCost: 800,
+      estimatedSellingPrice: 3000,
     });
     expect(first?.imageStatus).toBe('completed');
     expect(first?.imagePath).toMatch(/^generated\/idea-.*\.png$/);
@@ -288,6 +293,187 @@ describe('POST /api/ai/generate-ideas persistence', () => {
     expect(completed).toHaveLength(2);
     expect(failed[0]?.imagePath).toBeNull();
     expect(completed.every((idea) => idea.imagePath !== null)).toBe(true);
+  });
+
+  it('persists a variable number of ideas with their images', async () => {
+    stubMeta((index) => (index === 3 ? new Error('boom') : imageBody()), [1, 2, 3, 4, 5]);
+
+    const res = await postPhoto();
+
+    expect(res.statusCode).toBe(200);
+    const body = parseJson<PersistBody>(res);
+    expect(body.data.ideas).toHaveLength(5);
+    const ideas = await GeneratedIdea.findAll({ order: [['createdAt', 'ASC']] });
+    expect(ideas).toHaveLength(5);
+    expect(ideas.map((idea) => idea.title)).toEqual([
+      'Idea 1',
+      'Idea 2',
+      'Idea 3',
+      'Idea 4',
+      'Idea 5',
+    ]);
+    // One image failed: its row is kept with a null path, the rest completed.
+    expect(ideas.filter((idea) => idea.imageStatus === 'failed')).toHaveLength(1);
+    expect(ideas.filter((idea) => idea.imageStatus === 'completed')).toHaveLength(4);
+    const files = await fs.readdir(`${env.uploadDir}/generated`);
+    expect(files.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it('keeps rows written with the legacy price shape readable', async () => {
+    const source = await SourceObject.create({
+      ownerId: null,
+      anonymousOwnerId: crypto.randomUUID(),
+      imagePath: 'source/legacy.png',
+      name: 'Cup',
+      material: 'plastic',
+      condition: 'reusable',
+    });
+    await GeneratedIdea.create({
+      sourceObjectId: source.id,
+      title: 'Legacy idea',
+      description: 'Stored before AI estimation.',
+      intendedUse: 'Decoration',
+      additionalMaterials: [],
+      tools: [],
+      difficulty: 'Easy',
+      estimatedMinutes: 10,
+      tutorialSteps: [],
+      safetyNotes: [],
+      imagePath: null,
+      imageStatus: 'failed',
+      marketPrice: {
+        status: 'not_found',
+        amount: null,
+        currency: null,
+        sourceUrl: null,
+        listingTitle: null,
+      },
+    });
+
+    const stored = await GeneratedIdea.findOne({ where: { sourceObjectId: source.id } });
+
+    expect(stored?.marketPrice).toEqual({
+      status: 'not_found',
+      amount: null,
+      currency: null,
+      sourceUrl: null,
+      listingTitle: null,
+    });
+    expect(normalizeStoredMarketPrice(stored?.marketPrice)).toEqual({
+      status: 'estimated',
+      currency: 'MGA',
+      estimatedCost: null,
+      estimatedSellingPrice: null,
+    });
+  });
+
+  it('keeps rows written with the MGA estimate shape readable', async () => {
+    const source = await SourceObject.create({
+      ownerId: null,
+      anonymousOwnerId: crypto.randomUUID(),
+      imagePath: 'source/mga-legacy.png',
+      name: 'Cup',
+      material: 'plastic',
+      condition: 'reusable',
+    });
+    await GeneratedIdea.create({
+      sourceObjectId: source.id,
+      title: 'MGA legacy idea',
+      description: 'Stored before the USD switch.',
+      intendedUse: 'Decoration',
+      additionalMaterials: [],
+      tools: [],
+      difficulty: 'Easy',
+      estimatedMinutes: 10,
+      tutorialSteps: [],
+      safetyNotes: [],
+      imagePath: null,
+      imageStatus: 'failed',
+      marketPrice: {
+        status: 'estimated',
+        currency: 'MGA',
+        estimatedCostMGA: 1000,
+        estimatedSellingPriceMGA: 5000,
+      },
+    });
+
+    const stored = await GeneratedIdea.findOne({ where: { sourceObjectId: source.id } });
+
+    expect(stored?.marketPrice).toEqual({
+      status: 'estimated',
+      currency: 'MGA',
+      estimatedCostMGA: 1000,
+      estimatedSellingPriceMGA: 5000,
+    });
+    expect(normalizeStoredMarketPrice(stored?.marketPrice)).toEqual({
+      status: 'estimated',
+      currency: 'MGA',
+      estimatedCost: 1000,
+      estimatedSellingPrice: 5000,
+    });
+  });
+
+  it('keeps rows written with the USD estimate shape readable', async () => {
+    const source = await SourceObject.create({
+      ownerId: null,
+      anonymousOwnerId: crypto.randomUUID(),
+      imagePath: 'source/usd-legacy.png',
+      name: 'Cup',
+      material: 'plastic',
+      condition: 'reusable',
+    });
+    await GeneratedIdea.create({
+      sourceObjectId: source.id,
+      title: 'USD legacy idea',
+      description: 'Stored before standardization.',
+      intendedUse: 'Decoration',
+      additionalMaterials: [],
+      tools: [],
+      difficulty: 'Easy',
+      estimatedMinutes: 10,
+      tutorialSteps: [],
+      safetyNotes: [],
+      imagePath: null,
+      imageStatus: 'failed',
+      marketPrice: {
+        status: 'estimated',
+        currency: 'USD',
+        estimatedCostUSD: 5,
+        estimatedSellingPriceUSD: 25,
+      },
+    });
+
+    const stored = await GeneratedIdea.findOne({ where: { sourceObjectId: source.id } });
+
+    expect(stored?.marketPrice).toEqual({
+      status: 'estimated',
+      currency: 'USD',
+      estimatedCostUSD: 5,
+      estimatedSellingPriceUSD: 25,
+    });
+    // Currency preserved so the amounts are never mislabeled.
+    expect(normalizeStoredMarketPrice(stored?.marketPrice)).toEqual({
+      status: 'estimated',
+      currency: 'USD',
+      estimatedCost: 5,
+      estimatedSellingPrice: 25,
+    });
+  });
+
+  it('normalizes malformed stored prices to null estimates without throwing', () => {
+    const empty = {
+      status: 'estimated',
+      currency: 'MGA',
+      estimatedCost: null,
+      estimatedSellingPrice: null,
+    };
+    expect(normalizeStoredMarketPrice(null)).toEqual(empty);
+    expect(normalizeStoredMarketPrice(undefined)).toEqual(empty);
+    expect(normalizeStoredMarketPrice('garbage')).toEqual(empty);
+    expect(normalizeStoredMarketPrice({})).toEqual(empty);
+    expect(
+      normalizeStoredMarketPrice({ estimatedCost: -5, estimatedSellingPrice: 'much' }),
+    ).toEqual(empty);
   });
 
   it('refuses records without exactly one ownership mechanism', async () => {

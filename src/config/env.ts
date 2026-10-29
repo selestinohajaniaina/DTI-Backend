@@ -80,6 +80,9 @@ export const envSchema = z
       .regex(expiresInPattern, 'JWT_EXPIRES_IN must look like "15m", "1h" or "3600"')
       .default('15m'),
     BCRYPT_ROUNDS: z.coerce.number().int().min(4).max(31).default(12),
+    // Upcycling ideas requested per photo. Each idea costs one image request,
+    // so the maximum bounds AI usage and response latency.
+    GENERATED_IDEAS_COUNT: z.coerce.number().int().min(1).max(10).default(5),
     // Optional: only /api/ai/* routes need it. Empty string counts as unset
     // so providers passing an empty MODEL_API_KEY do not break boot.
     MODEL_API_KEY: z
@@ -165,6 +168,7 @@ export const env = {
   jwtSecret: values.JWT_SECRET,
   jwtExpiresIn: values.JWT_EXPIRES_IN,
   bcryptRounds: values.BCRYPT_ROUNDS,
+  generatedIdeasCount: values.GENERATED_IDEAS_COUNT,
   modelApiKey: values.MODEL_API_KEY,
   metaApiBase: values.META_API_BASE,
   uploadDir: values.UPLOAD_DIR,

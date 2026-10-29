@@ -62,6 +62,7 @@ export async function runAiTest(
   prompt: string,
   apiKey: string | undefined,
   metaApiBase: string,
+  signal?: AbortSignal,
 ): Promise<AiTestResult> {
   if (!apiKey) {
     throw new AppError(503, 'AI_NOT_CONFIGURED', 'Meta AI is not configured on this server');
@@ -73,6 +74,7 @@ export async function runAiTest(
     { model: META_TEST_MODEL, input: prompt },
     apiKey,
     REQUEST_TIMEOUT_MS,
+    { operation: 'ai-test', signal },
   );
   assertResponseCompleted(payload);
 

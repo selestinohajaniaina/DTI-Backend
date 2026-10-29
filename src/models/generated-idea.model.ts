@@ -13,12 +13,107 @@ export interface StoredTutorialStep {
   description: string;
 }
 
-export interface StoredMarketPrice {
-  status: string;
-  amount: number | null;
-  currency: string | null;
-  sourceUrl: string | null;
-  listingTitle: string | null;
+/** Canonical shape: every new write uses this (see README). */
+export interface StoredMarketPriceEstimate {
+  status: 'estimated';
+  currency: 'MGA';
+  estimatedCost: number | null;
+  estimatedSellingPrice: number | null;
+}
+
+/** Estimate shape with an MGA suffix, briefly written before standardization. */
+export interface StoredMarketPriceEstimateMGA {
+  status: 'estimated' | 'unavailable';
+  currency: 'MGA';
+  estimatedCostMGA: number | null;
+  estimatedSellingPriceMGA: number | null;
+}
+
+/** Estimate shape with a USD suffix, briefly written before standardization. */
+export interface StoredMarketPriceEstimateUSD {
+  status: 'estimated' | 'unavailable';
+  currency: 'USD';
+  estimatedCostUSD: number | null;
+  estimatedSellingPriceUSD: number | null;
+}
+
+/** Legacy shape written before AI estimation; old rows remain readable. */
+export interface StoredMarketPriceLegacy {
+  status: 'not_found';
+  amount: null;
+  currency: null;
+  sourceUrl: null;
+  listingTitle: null;
+}
+
+export type StoredMarketPrice =
+  | StoredMarketPriceEstimate
+  | StoredMarketPriceEstimateMGA
+  | StoredMarketPriceEstimateUSD
+  | StoredMarketPriceLegacy;
+
+/**
+ * Canonical API shape. Currency is preserved per row (a legacy USD row keeps
+ * 'USD' so its amounts are never mislabeled); all new writes use 'MGA'.
+ */
+export interface NormalizedMarketPrice {
+  status: 'estimated';
+  currency: string;
+  estimatedCost: number | null;
+  estimatedSellingPrice: number | null;
+}
+
+function storedAmount(row: Record<string, unknown>, key: string): number | null {
+  const value: unknown = row[key];
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  return Math.round(value);
+}
+
+/**
+ * Maps any stored `marketPrice` value (current or legacy shape) to the
+ * canonical API contract, so previously saved ideas stay displayable without
+ * rewriting production data. Missing or malformed values degrade to null
+ * estimates rather than throwing.
+ */
+export function normalizeStoredMarketPrice(value: unknown): NormalizedMarketPrice {
+  const empty = (currency: string): NormalizedMarketPrice => ({
+    status: 'estimated',
+    currency,
+    estimatedCost: null,
+    estimatedSellingPrice: null,
+  });
+  if (typeof value !== 'object' || value === null) {
+    return empty('MGA');
+  }
+  const row = value as Record<string, unknown>;
+  if ('estimatedCost' in row || 'estimatedSellingPrice' in row) {
+    return {
+      status: 'estimated',
+      currency: 'MGA',
+      estimatedCost: storedAmount(row, 'estimatedCost'),
+      estimatedSellingPrice: storedAmount(row, 'estimatedSellingPrice'),
+    };
+  }
+  if ('estimatedCostMGA' in row || 'estimatedSellingPriceMGA' in row) {
+    return {
+      status: 'estimated',
+      currency: 'MGA',
+      estimatedCost: storedAmount(row, 'estimatedCostMGA'),
+      estimatedSellingPrice: storedAmount(row, 'estimatedSellingPriceMGA'),
+    };
+  }
+  if ('estimatedCostUSD' in row || 'estimatedSellingPriceUSD' in row) {
+    return {
+      status: 'estimated',
+      currency: 'USD',
+      estimatedCost: storedAmount(row, 'estimatedCostUSD'),
+      estimatedSellingPrice: storedAmount(row, 'estimatedSellingPriceUSD'),
+    };
+  }
+  // `not_found` rows and anything unrecognized carry no estimates.
+  return empty('MGA');
 }
 
 export class GeneratedIdea extends Model<
