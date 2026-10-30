@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import { toValidationError } from '../middlewares/validate.middleware';
-import { emptyLibraryPage, listIdeas, listSourceObjects } from '../services/library.service';
+import { listIdeas, listSourceObjects } from '../services/library.service';
 import { asyncHandler } from '../utils/async-handler';
 import { sendSuccess } from '../utils/response';
 import { listIdeasQuerySchema } from '../validators/library.validator';
