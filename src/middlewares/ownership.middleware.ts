@@ -41,3 +41,33 @@ export function attachOwnership(req: Request, _res: Response, next: NextFunction
   req.ownership = ownership;
   next();
 }
+
+/**
+ * Read-side counterpart of attachOwnership: resolves the caller's ownership
+ * WITHOUT minting a new identifier. Authenticated callers resolve by user
+ * id, anonymous callers by their presented UUID; callers with neither are
+ * left without ownership (list endpoints answer an empty page — an unknown
+ * identity owns nothing). A malformed presented UUID still fails fast.
+ * Requires requireAuth or optionalAuth earlier in the chain.
+ */
+export function resolveOwnership(req: Request, _res: Response, next: NextFunction): void {
+  if (req.user) {
+    const ownership: GenerationOwnership = { kind: 'user', userId: req.user.id };
+    req.ownership = ownership;
+    next();
+    return;
+  }
+  const presented = req.header(ANONYMOUS_OWNER_HEADER);
+  if (!presented) {
+    next();
+    return;
+  }
+  const parsed = anonymousOwnerIdSchema.safeParse(presented.trim());
+  if (!parsed.success) {
+    next(new AppError(400, 'VALIDATION_ERROR', 'Invalid anonymous owner identifier'));
+    return;
+  }
+  const ownership: GenerationOwnership = { kind: 'anonymous', anonymousOwnerId: parsed.data };
+  req.ownership = ownership;
+  next();
+}

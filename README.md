@@ -310,6 +310,24 @@ storage keys live in PostgreSQL — image bytes stay on disk under
 so files still need a persistent disk (or object storage) to survive
 redeploys; see the deploy section above.
 
+### Ideas library (read API)
+
+`GET /api/ai/ideas` lists the caller's saved ideas, paginated:
+`q` (searches title, description, intended use, source name),
+`sourceObjectId`, `difficulty`, `hasPrice`, `sort`
+(`newest|oldest|title|priceAsc|priceDesc`, null prices always last),
+`page` (default 1), `limit` (default 12, max 50). Answers
+`{ items, page, limit, total, totalPages }`; stored `marketPrice`
+shapes are normalized via `normalizeStoredMarketPrice()` and image keys
+are mapped to `/uploads/...` URLs. `GET /api/ai/source-objects` lists
+the caller's source objects (newest first, capped at 100) for filter
+options. Both routes use `optionalAuth` + `resolveOwnership`: Bearer
+callers read their `ownerId` rows, anonymous callers their presented
+`X-Anonymous-Owner-Id` rows, callers with neither receive an empty list.
+Ownership is enforced by scoping the joined source objects, so foreign
+ids simply match nothing. No new indexes were needed: owner lookups use
+the existing `ownerId`/`anonymousOwnerId`/`sourceObjectId` indexes.
+
 ### Authentication flow
 
 1. Client POSTs credentials to `/api/auth/register` or `/api/auth/login`.
