@@ -303,10 +303,10 @@ export async function postMetaJson(
       path,
       status: res.status,
     });
-    console.log(" =======");
-    console.log("ERROR ON res", res);
-    console.log(" =======");
-    
+    console.log(' =======');
+    console.log('ERROR ON res', res);
+    console.log(' =======');
+
     throw new AppError(502, 'AI_UPSTREAM_ERROR', 'Meta AI request failed');
   }
   return payload;
@@ -325,6 +325,9 @@ export function assertResponseCompleted(payload: unknown): void {
     code: typeof failure?.['code'] === 'string' ? failure['code'] : 'unknown',
     message: typeof failure?.['message'] === 'string' ? failure['message'] : 'unknown',
   });
+  console.log(' =======');
+  console.log('ERROR ON failure', failure);
+  console.log(' =======');
   throw new AppError(502, 'AI_UPSTREAM_ERROR', 'Meta AI request failed');
 }
 
