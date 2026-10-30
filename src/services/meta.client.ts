@@ -296,6 +296,12 @@ export async function postMetaJson(
     { ...policy, logTarget: { path }, timeoutMs },
   );
 
+  console.log(' =======');
+  console.log('ERROR ON res', res);
+  console.log(' =======');
+  console.log('path', `${baseUrl}${path}`);
+  console.log('Body', body);
+
   const payload: unknown = await res.json().catch(() => undefined);
   if (payload === undefined) {
     logger.warn('meta ai returned invalid json', {
@@ -304,7 +310,7 @@ export async function postMetaJson(
       status: res.status,
     });
     console.log(' =======');
-    console.log('ERROR ON res', res);
+    console.log('ERROR ON res after payload', res);
     console.log(' =======');
 
     throw new AppError(502, 'AI_UPSTREAM_ERROR', 'Meta AI request failed');
