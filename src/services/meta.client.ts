@@ -303,6 +303,10 @@ export async function postMetaJson(
       path,
       status: res.status,
     });
+    console.log(" =======");
+    console.log("ERROR ON res", res);
+    console.log(" =======");
+    
     throw new AppError(502, 'AI_UPSTREAM_ERROR', 'Meta AI request failed');
   }
   return payload;
