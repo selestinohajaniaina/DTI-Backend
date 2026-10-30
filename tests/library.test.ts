@@ -55,9 +55,9 @@ interface SourceObjectsBody {
 
 const PRICE = {
   status: 'estimated',
-  currency: 'MGA',
-  estimatedCost: 800,
-  estimatedSellingPrice: 3000,
+  currency: 'USD',
+  estimatedCost: 2.5,
+  estimatedSellingPrice: 8,
 } as const;
 
 async function seedSource(owner: { userId?: string; anonymousOwnerId?: string }, name = 'Cup') {
@@ -139,9 +139,9 @@ describe('GET /api/ai/ideas', () => {
     expect(item?.image).toEqual({ url: '/uploads/generated/idea.png', status: 'completed' });
     expect(item?.marketPrice).toEqual({
       status: 'estimated',
-      currency: 'MGA',
-      estimatedCost: 800,
-      estimatedSellingPrice: 3000,
+      currency: 'USD',
+      estimatedCost: 2.5,
+      estimatedSellingPrice: 8,
     });
     expect(item?.tutorial.steps).toEqual([{ step: 1, title: 'Do', description: 'Do it' }]);
     expect(item?.sourceObject).toMatchObject({ id: source.id, name: 'Bottle' });
@@ -347,7 +347,7 @@ describe('GET /api/ai/ideas', () => {
       title: 'Unpriced',
       marketPrice: {
         status: 'estimated',
-        currency: 'MGA',
+        currency: 'USD',
         estimatedCost: null,
         estimatedSellingPrice: null,
       },
@@ -391,9 +391,9 @@ describe('GET /api/ai/ideas', () => {
       createdAt: new Date('2026-01-01T00:00:00.000Z'),
       marketPrice: {
         status: 'estimated',
-        currency: 'MGA',
-        estimatedCost: 100,
-        estimatedSellingPrice: 500,
+        currency: 'USD',
+        estimatedCost: 1,
+        estimatedSellingPrice: 2.5,
       },
     });
     await seedIdea(source.id, {
@@ -401,17 +401,17 @@ describe('GET /api/ai/ideas', () => {
       createdAt: new Date('2026-02-01T00:00:00.000Z'),
       marketPrice: {
         status: 'estimated',
-        currency: 'MGA',
-        estimatedCostMGA: 1000,
-        estimatedSellingPriceMGA: 5000,
-      } as unknown as StoredMarketPrice,
+        currency: 'USD',
+        estimatedCost: 2,
+        estimatedSellingPrice: 12,
+      },
     });
     await seedIdea(source.id, {
       title: 'cherry',
       createdAt: new Date('2026-03-01T00:00:00.000Z'),
       marketPrice: {
         status: 'estimated',
-        currency: 'MGA',
+        currency: 'USD',
         estimatedCost: null,
         estimatedSellingPrice: null,
       },
@@ -454,7 +454,7 @@ describe('GET /api/ai/ideas', () => {
     });
     expect(res.json<LibraryPageBody>().data.items[0]?.marketPrice).toEqual({
       status: 'estimated',
-      currency: 'MGA',
+      currency: 'USD',
       estimatedCost: null,
       estimatedSellingPrice: null,
     });

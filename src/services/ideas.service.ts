@@ -26,10 +26,10 @@ const SPARK_TIMEOUT_MS = 180_000;
 const IMAGE_TIMEOUT_MS = 180_000;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
-const PRICE_GUIDANCE = `Price estimate (Malagasy Ariary — MGA, whole amounts):
-- estimatedCost: a rough, easy-to-understand estimate of what it would cost to make the product (materials plus a share of the assembly effort).
-- estimatedSellingPrice: a rough, easy-to-understand estimate of what the finished item could sell for on the Malagasy market.
-Keep both plausible and familiar: round whole amounts such as 800, 1500, or 3000 — never precise-looking figures such as 1247. Base them on the required materials, the manufacturing or assembly cost, and the time and complexity involved. These are approximate estimates, never verified market prices or guaranteed profits. If you cannot estimate a reasonable price, return null for that field rather than inventing one. Do not invent listings, sellers, URLs, or claims of online research.`;
+const PRICE_GUIDANCE = `Price estimate (US dollars — USD only):
+- estimatedCost: a rough, easy-to-understand estimate in USD of what it would cost to make the product (materials plus a share of the assembly effort).
+- estimatedSellingPrice: a rough, easy-to-understand estimate in USD of what the finished item could sell for.
+Always express both amounts in US dollars (USD); never use another currency. Keep both plausible and familiar: simple amounts such as 2.5, 5, or 8 — never precise-looking figures such as 7.83. Base them on the required materials, the manufacturing or assembly cost, and the time and complexity involved. These are approximate estimates, never verified market prices or guaranteed profits. If you cannot estimate a reasonable price, return null for that field rather than inventing one. Do not search the Internet, look up market prices online, or invent listings, sellers, URLs, or claims of online research.`;
 
 function buildSystemPrompt(ideasCount: number): string {
   return `You are DTI (Don't Trash It), an expert in creative upcycling, practical reuse, sustainable design, and beginner-friendly DIY projects.
@@ -54,10 +54,12 @@ Return only valid JSON matching the required response schema. Do not include Mar
 
 // Strict-subset compliant: root object, additionalProperties:false on every
 // object, required lists every key. Sent via text.format (Responses API).
-// The price fields use standard `['integer', 'null']` unions (no request
+// The price fields use standard `['number', 'null']` unions (no request
 // sets `strict: true`, so the schema is accepted as-is and output stays
-// schema-constrained). Whole Malagasy Ariary (MGA) amounts only.
-const MAX_PRICE_MGA = 100_000_000;
+// schema-constrained). US dollar (USD) amounts with optional cents. The
+// schema carries no currency field on purpose: the model never chooses the
+// currency, the server always stamps 'USD' (see toMarketPrice).
+const MAX_PRICE_USD = 1_000_000;
 
 function buildIdeasJsonSchema(ideasCount: number): Record<string, unknown> {
   return {
@@ -128,11 +130,11 @@ function buildIdeasJsonSchema(ideasCount: number): Record<string, unknown> {
               additionalProperties: false,
               required: ['estimatedCost', 'estimatedSellingPrice'],
               properties: {
-                estimatedCost: { type: ['integer', 'null'], minimum: 0, maximum: MAX_PRICE_MGA },
+                estimatedCost: { type: ['number', 'null'], minimum: 0, maximum: MAX_PRICE_USD },
                 estimatedSellingPrice: {
-                  type: ['integer', 'null'],
+                  type: ['number', 'null'],
                   minimum: 0,
-                  maximum: MAX_PRICE_MGA,
+                  maximum: MAX_PRICE_USD,
                 },
               },
             },
@@ -149,18 +151,20 @@ const tutorialStepSchema = z.object({
   description: z.string().trim().min(1).max(2000),
 });
 
-// The model is asked for whole amounts; round defensively so 1247.6 becomes
-// 1248 instead of discarding an otherwise valid idea.
-const wholeAmount = z
+// The model is asked for simple dollar amounts; round defensively to cents
+// so 12.476 becomes 12.48 instead of storing fractions of a cent. Unknown
+// keys (a rogue `currency` included) are stripped: the server owns the
+// currency, never the model response.
+const usdAmount = z
   .number()
   .min(0)
-  .max(MAX_PRICE_MGA)
+  .max(MAX_PRICE_USD)
   .nullable()
-  .transform((value) => (value === null ? null : Math.round(value)));
+  .transform((value) => (value === null ? null : Math.round(value * 100) / 100));
 
 const priceEstimateSchema = z.object({
-  estimatedCost: wholeAmount,
-  estimatedSellingPrice: wholeAmount,
+  estimatedCost: usdAmount,
+  estimatedSellingPrice: usdAmount,
 });
 
 const rawIdeaSchema = z.object({
@@ -254,7 +258,7 @@ export interface PriceEstimate {
 
 export interface MarketPriceInfo extends PriceEstimate {
   status: 'estimated';
-  currency: 'MGA';
+  currency: 'USD';
 }
 
 export interface IdeaTutorialStep {
@@ -319,7 +323,7 @@ const FAILED_IMAGE: GeneratedIdeaImage = { url: null, status: 'failed' };
 function toMarketPrice(estimate: PriceEstimate): MarketPriceInfo {
   return {
     status: 'estimated',
-    currency: 'MGA',
+    currency: 'USD',
     estimatedCost: estimate.estimatedCost,
     estimatedSellingPrice: estimate.estimatedSellingPrice,
   };

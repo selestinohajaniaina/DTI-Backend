@@ -266,21 +266,29 @@ cause for diagnosis.
 field (JPEG/PNG/WebP/GIF verified by magic bytes, 10 MB max) and returns
 `{ sourceObject, ideas[N] }`: title, description, difficulty, estimated
 minutes, tutorial (materials, tools, steps, safety notes), an AI-estimated
-price in MGA (Malagasy Ariary), and an illustration per idea.
+price in USD, and an illustration per idea.
 
 The model is asked for `GENERATED_IDEAS_COUNT` ideas (default 5, max 10);
 fewer are returned when the model sends fewer valid, distinct entries.
 Each idea carries the standardized `marketPrice: { status: "estimated",
-currency: "MGA", estimatedCost, estimatedSellingPrice }`, where either
-amount is a whole ariary number or `null` when the model cannot estimate
-it reliably. API consumers format amounts for display from the `currency`
-field (e.g. `Ar 3,000`). These are rough AI estimates, never verified
-market prices or guaranteed profits. Rows stored with older shapes (the
-`{ status: "not_found", ... }` prototype shape or the briefly used
-`estimatedCostMGA`/`estimatedCostUSD` estimate shapes) remain readable via
-the `StoredMarketPrice` union and are mapped to the canonical contract by
-`normalizeStoredMarketPrice()` at read time; no data migration was needed
-(schemaless JSONB column, production data untouched).
+currency: "USD", estimatedCost, estimatedSellingPrice }`, where either
+amount is a dollar number with optional cents or `null` when the model
+cannot estimate it reliably. API consumers format amounts for display
+(e.g. `$8.00`). These are rough AI estimates, never verified market
+prices or guaranteed profits. The AI schema carries no currency field on
+purpose: the model only returns amounts, and the server always stamps
+`"USD"` (a rogue model-provided currency is stripped by validation).
+
+Rows stored before the USD switch were converted by migration
+`20261030000001-convert-market-price-to-usd`: MGA amounts divided by the
+documented rate (1 USD = 4512.52 MGA, ExchangeRatesNow.com USD/MGA
+reference rate published 2026-10-26), rounded to cents, with the exact
+original JSON preserved in the `marketPriceMga` archive column, so `down`
+restores the originals byte-for-byte. `not_found` prototype rows need no
+conversion and are untouched. At read time, `normalizeStoredMarketPrice()`
+passes canonical USD rows through and degrades anything else (`not_found`
+rows, unmigrated non-USD rows, malformed values) to empty USD estimates,
+so a foreign-currency amount can never be displayed as dollars.
 
 ```bash
 curl -X POST http://127.0.0.1:3000/api/ai/generate-ideas \

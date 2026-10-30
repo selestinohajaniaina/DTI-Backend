@@ -16,25 +16,9 @@ export interface StoredTutorialStep {
 /** Canonical shape: every new write uses this (see README). */
 export interface StoredMarketPriceEstimate {
   status: 'estimated';
-  currency: 'MGA';
+  currency: 'USD';
   estimatedCost: number | null;
   estimatedSellingPrice: number | null;
-}
-
-/** Estimate shape with an MGA suffix, briefly written before standardization. */
-export interface StoredMarketPriceEstimateMGA {
-  status: 'estimated' | 'unavailable';
-  currency: 'MGA';
-  estimatedCostMGA: number | null;
-  estimatedSellingPriceMGA: number | null;
-}
-
-/** Estimate shape with a USD suffix, briefly written before standardization. */
-export interface StoredMarketPriceEstimateUSD {
-  status: 'estimated' | 'unavailable';
-  currency: 'USD';
-  estimatedCostUSD: number | null;
-  estimatedSellingPriceUSD: number | null;
 }
 
 /** Legacy shape written before AI estimation; old rows remain readable. */
@@ -46,19 +30,18 @@ export interface StoredMarketPriceLegacy {
   listingTitle: null;
 }
 
-export type StoredMarketPrice =
-  | StoredMarketPriceEstimate
-  | StoredMarketPriceEstimateMGA
-  | StoredMarketPriceEstimateUSD
-  | StoredMarketPriceLegacy;
+export type StoredMarketPrice = StoredMarketPriceEstimate | StoredMarketPriceLegacy;
 
 /**
- * Canonical API shape. Currency is preserved per row (a legacy USD row keeps
- * 'USD' so its amounts are never mislabeled); all new writes use 'MGA'.
+ * Pre-conversion archive row: any `marketPrice` JSON stored before the USD
+ * switch (see the `marketPriceMga` column). Never served to API consumers.
  */
+export type ArchivedMarketPrice = Record<string, unknown>;
+
+/** Canonical API shape. USD only; see `normalizeStoredMarketPrice`. */
 export interface NormalizedMarketPrice {
   status: 'estimated';
-  currency: string;
+  currency: 'USD';
   estimatedCost: number | null;
   estimatedSellingPrice: number | null;
 }
@@ -68,52 +51,37 @@ function storedAmount(row: Record<string, unknown>, key: string): number | null 
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
     return null;
   }
-  return Math.round(value);
+  return value;
 }
 
 /**
- * Maps any stored `marketPrice` value (current or legacy shape) to the
- * canonical API contract, so previously saved ideas stay displayable without
- * rewriting production data. Missing or malformed values degrade to null
- * estimates rather than throwing.
+ * Maps any stored `marketPrice` value to the canonical API contract, so
+ * previously saved ideas stay displayable. Only canonical USD rows carry
+ * amounts: `not_found` legacy rows, unmigrated foreign-currency rows, and
+ * malformed values degrade to null estimates rather than throwing — and a
+ * non-USD amount can never be relabeled as dollars.
  */
 export function normalizeStoredMarketPrice(value: unknown): NormalizedMarketPrice {
-  const empty = (currency: string): NormalizedMarketPrice => ({
+  const empty = (): NormalizedMarketPrice => ({
     status: 'estimated',
-    currency,
+    currency: 'USD',
     estimatedCost: null,
     estimatedSellingPrice: null,
   });
   if (typeof value !== 'object' || value === null) {
-    return empty('MGA');
+    return empty();
   }
   const row = value as Record<string, unknown>;
-  if ('estimatedCost' in row || 'estimatedSellingPrice' in row) {
-    return {
-      status: 'estimated',
-      currency: 'MGA',
-      estimatedCost: storedAmount(row, 'estimatedCost'),
-      estimatedSellingPrice: storedAmount(row, 'estimatedSellingPrice'),
-    };
+  const hasCanonicalKeys = 'estimatedCost' in row || 'estimatedSellingPrice' in row;
+  if (row['currency'] !== 'USD' || !hasCanonicalKeys) {
+    return empty();
   }
-  if ('estimatedCostMGA' in row || 'estimatedSellingPriceMGA' in row) {
-    return {
-      status: 'estimated',
-      currency: 'MGA',
-      estimatedCost: storedAmount(row, 'estimatedCostMGA'),
-      estimatedSellingPrice: storedAmount(row, 'estimatedSellingPriceMGA'),
-    };
-  }
-  if ('estimatedCostUSD' in row || 'estimatedSellingPriceUSD' in row) {
-    return {
-      status: 'estimated',
-      currency: 'USD',
-      estimatedCost: storedAmount(row, 'estimatedCostUSD'),
-      estimatedSellingPrice: storedAmount(row, 'estimatedSellingPriceUSD'),
-    };
-  }
-  // `not_found` rows and anything unrecognized carry no estimates.
-  return empty('MGA');
+  return {
+    status: 'estimated',
+    currency: 'USD',
+    estimatedCost: storedAmount(row, 'estimatedCost'),
+    estimatedSellingPrice: storedAmount(row, 'estimatedSellingPrice'),
+  };
 }
 
 export class GeneratedIdea extends Model<
@@ -135,6 +103,9 @@ export class GeneratedIdea extends Model<
   declare imagePath: string | null;
   declare imageStatus: string;
   declare marketPrice: StoredMarketPrice;
+  // Pre-USD-conversion archive, populated by the 20261030000001 migration for
+  // converted rows only; null for every row written after the USD switch.
+  declare marketPriceMga: CreationOptional<ArchivedMarketPrice | null>;
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
 }
@@ -205,6 +176,10 @@ export function initGeneratedIdeaModel(sequelize: Sequelize): void {
       marketPrice: {
         type: DataTypes.JSONB,
         allowNull: false,
+      },
+      marketPriceMga: {
+        type: DataTypes.JSONB,
+        allowNull: true,
       },
       createdAt: {
         type: DataTypes.DATE,

@@ -6,6 +6,7 @@ import { env } from '../src/config/env';
 import { SPARK_MODEL } from '../src/services/ideas.service';
 import { signAccessToken } from '../src/utils/jwt';
 import { GeneratedIdea, normalizeStoredMarketPrice } from '../src/models/generated-idea.model';
+import type { StoredMarketPrice } from '../src/models/generated-idea.model';
 import { SourceObject } from '../src/models/source-object.model';
 import { app, parseJson, registerAndGetToken } from './helpers';
 
@@ -62,8 +63,8 @@ function sparkBody(ideaIndexes: number[] = [1, 2, 3]): Record<string, unknown> {
       safetyNotes: ['Wear gloves'],
       imagePrompt: `Finished upcycled object ${index}, product photo`,
       priceEstimate: {
-        estimatedCost: 800 * index,
-        estimatedSellingPrice: 3000 * index,
+        estimatedCost: 1.5 * index,
+        estimatedSellingPrice: 8 * index,
       },
     })),
   });
@@ -187,9 +188,9 @@ describe('POST /api/ai/generate-ideas persistence', () => {
     expect(first?.safetyNotes).toEqual(['Wear gloves']);
     expect(first?.marketPrice).toEqual({
       status: 'estimated',
-      currency: 'MGA',
-      estimatedCost: 800,
-      estimatedSellingPrice: 3000,
+      currency: 'USD',
+      estimatedCost: 1.5,
+      estimatedSellingPrice: 8,
     });
     expect(first?.imageStatus).toBe('completed');
     expect(first?.imagePath).toMatch(/^generated\/idea-.*\.png$/);
@@ -361,25 +362,25 @@ describe('POST /api/ai/generate-ideas persistence', () => {
     });
     expect(normalizeStoredMarketPrice(stored?.marketPrice)).toEqual({
       status: 'estimated',
-      currency: 'MGA',
+      currency: 'USD',
       estimatedCost: null,
       estimatedSellingPrice: null,
     });
   });
 
-  it('keeps rows written with the MGA estimate shape readable', async () => {
+  it('degrades unmigrated MGA rows to empty estimates instead of mislabeling them', async () => {
     const source = await SourceObject.create({
       ownerId: null,
       anonymousOwnerId: crypto.randomUUID(),
-      imagePath: 'source/mga-legacy.png',
+      imagePath: 'source/mga-unmigrated.png',
       name: 'Cup',
       material: 'plastic',
       condition: 'reusable',
     });
     await GeneratedIdea.create({
       sourceObjectId: source.id,
-      title: 'MGA legacy idea',
-      description: 'Stored before the USD switch.',
+      title: 'Unmigrated MGA idea',
+      description: 'Stored before the USD switch on a database that skipped the migration.',
       intendedUse: 'Decoration',
       additionalMaterials: [],
       tools: [],
@@ -392,9 +393,9 @@ describe('POST /api/ai/generate-ideas persistence', () => {
       marketPrice: {
         status: 'estimated',
         currency: 'MGA',
-        estimatedCostMGA: 1000,
-        estimatedSellingPriceMGA: 5000,
-      },
+        estimatedCost: 800,
+        estimatedSellingPrice: 3000,
+      } as unknown as StoredMarketPrice,
     });
 
     const stored = await GeneratedIdea.findOne({ where: { sourceObjectId: source.id } });
@@ -402,30 +403,31 @@ describe('POST /api/ai/generate-ideas persistence', () => {
     expect(stored?.marketPrice).toEqual({
       status: 'estimated',
       currency: 'MGA',
-      estimatedCostMGA: 1000,
-      estimatedSellingPriceMGA: 5000,
+      estimatedCost: 800,
+      estimatedSellingPrice: 3000,
     });
+    // Ariary amounts must never surface as dollars.
     expect(normalizeStoredMarketPrice(stored?.marketPrice)).toEqual({
       status: 'estimated',
-      currency: 'MGA',
-      estimatedCost: 1000,
-      estimatedSellingPrice: 5000,
+      currency: 'USD',
+      estimatedCost: null,
+      estimatedSellingPrice: null,
     });
   });
 
-  it('keeps rows written with the USD estimate shape readable', async () => {
+  it('keeps canonical USD rows readable with decimals preserved', async () => {
     const source = await SourceObject.create({
       ownerId: null,
       anonymousOwnerId: crypto.randomUUID(),
-      imagePath: 'source/usd-legacy.png',
+      imagePath: 'source/usd.png',
       name: 'Cup',
       material: 'plastic',
       condition: 'reusable',
     });
     await GeneratedIdea.create({
       sourceObjectId: source.id,
-      title: 'USD legacy idea',
-      description: 'Stored before standardization.',
+      title: 'USD idea',
+      description: 'Stored after the USD switch.',
       intendedUse: 'Decoration',
       additionalMaterials: [],
       tools: [],
@@ -438,8 +440,8 @@ describe('POST /api/ai/generate-ideas persistence', () => {
       marketPrice: {
         status: 'estimated',
         currency: 'USD',
-        estimatedCostUSD: 5,
-        estimatedSellingPriceUSD: 25,
+        estimatedCost: 2.5,
+        estimatedSellingPrice: 8,
       },
     });
 
@@ -448,22 +450,21 @@ describe('POST /api/ai/generate-ideas persistence', () => {
     expect(stored?.marketPrice).toEqual({
       status: 'estimated',
       currency: 'USD',
-      estimatedCostUSD: 5,
-      estimatedSellingPriceUSD: 25,
+      estimatedCost: 2.5,
+      estimatedSellingPrice: 8,
     });
-    // Currency preserved so the amounts are never mislabeled.
     expect(normalizeStoredMarketPrice(stored?.marketPrice)).toEqual({
       status: 'estimated',
       currency: 'USD',
-      estimatedCost: 5,
-      estimatedSellingPrice: 25,
+      estimatedCost: 2.5,
+      estimatedSellingPrice: 8,
     });
   });
 
   it('normalizes malformed stored prices to null estimates without throwing', () => {
     const empty = {
       status: 'estimated',
-      currency: 'MGA',
+      currency: 'USD',
       estimatedCost: null,
       estimatedSellingPrice: null,
     };

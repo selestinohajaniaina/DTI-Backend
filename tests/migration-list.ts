@@ -11,6 +11,10 @@ import {
   down as createGeneratedIdeasDown,
   up as createGeneratedIdeasUp,
 } from '../src/migrations/20261028000002-create-generated-ideas';
+import {
+  down as convertMarketPriceToUsdDown,
+  up as convertMarketPriceToUsdUp,
+} from '../src/migrations/20261030000001-convert-market-price-to-usd';
 
 // Migrations imported statically (so Vitest transforms them) instead of
 // Umzug's runtime glob import, which cannot load raw .ts files. Add future
@@ -26,5 +30,10 @@ export const testMigrations: InlineMigration[] = [
     name: '20261028000002-create-generated-ideas.ts',
     up: createGeneratedIdeasUp,
     down: createGeneratedIdeasDown,
+  },
+  {
+    name: '20261030000001-convert-market-price-to-usd.ts',
+    up: convertMarketPriceToUsdUp,
+    down: convertMarketPriceToUsdDown,
   },
 ];

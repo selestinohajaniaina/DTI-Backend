@@ -68,12 +68,12 @@ function escapeLike(value: string): string {
 }
 
 /**
- * Numeric selling price across every stored marketPrice shape (canonical,
- * MGA-suffixed, USD-suffixed). Text extraction (`->>`) maps both missing
- * keys and explicit JSON nulls to SQL NULL. Contains no user input: the
- * surrounding query only appends a whitelisted direction.
+ * Numeric selling price of the canonical USD `marketPrice` shape. Text
+ * extraction (`->>`) maps both missing keys and explicit JSON nulls to SQL
+ * NULL. Contains no user input: the surrounding query only appends a
+ * whitelisted direction.
  */
-const PRICE_EXPRESSION = `COALESCE("marketPrice"->>'estimatedSellingPrice',"marketPrice"->>'estimatedSellingPriceMGA',"marketPrice"->>'estimatedSellingPriceUSD')::numeric`;
+const PRICE_EXPRESSION = `("marketPrice"->>'estimatedSellingPrice')::numeric`;
 
 function ownerWhere(ownership: GenerationOwnership): WhereOptions {
   return ownership.kind === 'user'

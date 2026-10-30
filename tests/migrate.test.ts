@@ -65,7 +65,7 @@ describe('runCommand', () => {
     expect(await runCommand('down', freshDb(), testMigrations)).toBe(0);
     const probe = freshDb();
     try {
-      expect(await historyNames(probe)).toHaveLength(2);
+      expect(await historyNames(probe)).toHaveLength(3);
     } finally {
       await probe.close();
     }
@@ -73,7 +73,7 @@ describe('runCommand', () => {
     expect(await runCommand('up', freshDb(), testMigrations)).toBe(0);
     const db = freshDb();
     try {
-      expect(await historyNames(db)).toHaveLength(3);
+      expect(await historyNames(db)).toHaveLength(4);
     } finally {
       await db.close();
     }

@@ -80,7 +80,7 @@ function sparkIdea(index: number): Record<string, unknown> {
     tutorialSteps: [{ step: 1, title: 'Do it', description: 'Do it well.' }],
     safetyNotes: [],
     imagePrompt: `Finished upcycled object ${index}, product photo`,
-    priceEstimate: { estimatedCost: 800 * index, estimatedSellingPrice: 3000 * index },
+    priceEstimate: { estimatedCost: 1.5 * index, estimatedSellingPrice: 8 * index },
   };
 }
 
@@ -237,9 +237,9 @@ describe('POST /api/ai/generate-ideas', () => {
       expect(idea.image.url).toMatch(/^\/uploads\/generated\/idea-.*\.png$/);
       expect(idea.marketPrice).toEqual({
         status: 'estimated',
-        currency: 'MGA',
-        estimatedCost: 800 * (index + 1),
-        estimatedSellingPrice: 3000 * (index + 1),
+        currency: 'USD',
+        estimatedCost: 1.5 * (index + 1),
+        estimatedSellingPrice: 8 * (index + 1),
       });
       expect(idea.tutorial.steps.length).toBeGreaterThan(0);
     }
@@ -276,8 +276,11 @@ describe('POST /api/ai/generate-ideas', () => {
     expect(raw).toContain('priceEstimate');
     expect(raw).toContain('estimatedCost');
     expect(raw).toContain('estimatedSellingPrice');
-    expect(raw).toContain('MGA');
-    expect(raw).not.toContain('USD');
+    expect(raw).toContain('USD');
+    expect(raw).toContain('["number","null"]');
+    expect(raw).not.toContain('MGA');
+    expect(raw).not.toContain('Ariary');
+    expect(raw).not.toContain('["integer","null"]');
     expect(raw).not.toContain('estimatedCostMGA');
     expect(raw).not.toContain('estimatedSellingPriceMGA');
     expect(raw).not.toContain('estimatedCostUSD');
@@ -381,16 +384,16 @@ describe('POST /api/ai/generate-ideas', () => {
     expect(ideas).toHaveLength(1);
     expect(ideas[0]?.marketPrice).toEqual({
       status: 'estimated',
-      currency: 'MGA',
+      currency: 'USD',
       estimatedCost: null,
       estimatedSellingPrice: null,
     });
   });
 
-  it('rounds fractional model prices to whole amounts', async () => {
+  it('rounds fractional model prices to cents', async () => {
     const fractional = {
       ...sparkIdea(1),
-      priceEstimate: { estimatedCost: 1247.6, estimatedSellingPrice: 2999.4 },
+      priceEstimate: { estimatedCost: 12.474, estimatedSellingPrice: 8.126 },
     };
     stubMeta(sparkPayload([fractional]), () => imageB64Response());
 
@@ -401,9 +404,29 @@ describe('POST /api/ai/generate-ideas', () => {
     expect(ideas).toHaveLength(1);
     expect(ideas[0]?.marketPrice).toEqual({
       status: 'estimated',
-      currency: 'MGA',
-      estimatedCost: 1248,
-      estimatedSellingPrice: 2999,
+      currency: 'USD',
+      estimatedCost: 12.47,
+      estimatedSellingPrice: 8.13,
+    });
+  });
+
+  it('ignores a model-provided currency and always serves USD', async () => {
+    const rogue = {
+      ...sparkIdea(1),
+      priceEstimate: { estimatedCost: 2.5, estimatedSellingPrice: 8, currency: 'MGA' },
+    };
+    stubMeta(sparkPayload([rogue]), () => imageB64Response());
+
+    const res = await postIdeas(TINY_PNG);
+
+    expect(res.statusCode).toBe(200);
+    const ideas = parseJson<IdeasSuccessBody>(res).data.ideas;
+    expect(ideas).toHaveLength(1);
+    expect(ideas[0]?.marketPrice).toEqual({
+      status: 'estimated',
+      currency: 'USD',
+      estimatedCost: 2.5,
+      estimatedSellingPrice: 8,
     });
   });
 
