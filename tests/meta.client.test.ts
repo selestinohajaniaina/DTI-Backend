@@ -217,6 +217,15 @@ describe('postMetaJson', () => {
     }).catch((error: unknown) => error);
 
     expect(failure).toMatchObject({ statusCode: 504, code: 'AI_TIMEOUT' });
+    expect(failure).toMatchObject({
+      debug: {
+        provider: 'meta',
+        operation: 'meta-json',
+        upstreamEndpoint: '/responses',
+        upstreamStatus: null,
+        networkError: { name: 'TimeoutError', codes: [], timedOut: true },
+      },
+    });
     expect(loggedContexts(warnSpy)[0]).toMatchObject({ timedOut: true });
   });
 

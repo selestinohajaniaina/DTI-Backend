@@ -1,8 +1,12 @@
 import { AppError } from '../utils/errors';
+import type { ErrorCode } from '../utils/errors';
 import { logger } from '../utils/logger';
 
 const MAX_UPSTREAM_LOG_CHARS = 200;
 const MAX_LOGGED_CODES = 5;
+/** Full upstream bodies are exposed to /api/ai/test up to this size. */
+const MAX_UPSTREAM_BODY_CHARS = 8192;
+const MAX_SANITIZE_DEPTH = 10;
 
 /** First backoff window; doubles per retry (see computeBackoffDelayMs). */
 export const BASE_BACKOFF_MS = 1000;
@@ -110,6 +114,125 @@ function defaultSleep(ms: number): Promise<void> {
   });
 }
 
+/** Network failure detail, present only when no HTTP response was received. */
+export interface MetaNetworkErrorDebug {
+  name: string;
+  codes: string[];
+  timedOut: boolean;
+}
+
+/**
+ * Sanitized upstream diagnostics for the /api/ai/test debug block. Carried
+ * on MetaApiError; only that route serializes it, so no other endpoint can
+ * leak upstream internals.
+ */
+export interface MetaUpstreamDebug {
+  provider: 'meta';
+  operation: string;
+  upstreamEndpoint: string | null;
+  upstreamHost: string | null;
+  upstreamStatus: number | null;
+  upstreamStatusText: string | null;
+  /** Preserved `error` object from a JSON upstream body (sanitized). */
+  upstreamError: Record<string, unknown> | null;
+  /** Complete upstream body when available (sanitized, capped). */
+  upstreamBody: unknown;
+  bodyTruncated: boolean;
+  networkError: MetaNetworkErrorDebug | null;
+  reason: 'invalid-json' | 'generation-failed' | 'no-text-output' | null;
+}
+
+/**
+ * Meta failure with sanitized upstream diagnostics attached. A plain AppError
+ * subclass with identical status/code/message semantics: the generic error
+ * middleware (which only serializes code/message/details) renders it exactly
+ * like before, so attaching diagnostics changes no existing response.
+ */
+export class MetaApiError extends AppError {
+  readonly debug: MetaUpstreamDebug;
+
+  constructor(
+    statusCode: number,
+    code: ErrorCode,
+    message: string,
+    debug: MetaUpstreamDebug,
+    cause?: unknown,
+  ) {
+    super(statusCode, code, message, undefined, cause);
+    this.name = 'MetaApiError';
+    this.debug = debug;
+  }
+}
+
+const SENSITIVE_KEY_PATTERN =
+  /api[_-]?key|authorization|secret|token|password|passwd|credential|session|set-cookie|x-api-key/i;
+
+function sanitizeUpstreamJson(value: unknown, depth = 0): unknown {
+  if (Array.isArray(value) || isRecord(value)) {
+    if (depth >= MAX_SANITIZE_DEPTH) {
+      return '[truncated]';
+    }
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeUpstreamJson(item, depth + 1));
+  }
+  if (isRecord(value)) {
+    const clean: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      clean[key] = SENSITIVE_KEY_PATTERN.test(key)
+        ? '[REDACTED]'
+        : sanitizeUpstreamJson(entry, depth + 1);
+    }
+    return clean;
+  }
+  return value;
+}
+
+function extractUpstreamError(value: unknown): Record<string, unknown> | null {
+  if (isRecord(value) && isRecord(value['error'])) {
+    return value['error'];
+  }
+  return null;
+}
+
+export interface UpstreamBodyDebug {
+  body: unknown;
+  truncated: boolean;
+  error: Record<string, unknown> | null;
+}
+
+/**
+ * Prepares an upstream body for the debug block from raw text or parsed
+ * JSON: sanitizes sensitive fields, preserves the `error` object as-is, and
+ * caps oversized bodies with an explicit flag.
+ */
+export function describeUpstreamBody(raw: unknown): UpstreamBodyDebug {
+  if (typeof raw === 'string') {
+    if (raw.length > MAX_UPSTREAM_BODY_CHARS) {
+      return { body: raw.slice(0, MAX_UPSTREAM_BODY_CHARS), truncated: true, error: null };
+    }
+    let parsed: unknown = raw;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      // Keep the raw text below.
+    }
+    const sanitized = sanitizeUpstreamJson(parsed);
+    return { body: sanitized, truncated: false, error: extractUpstreamError(sanitized) };
+  }
+  const sanitized = sanitizeUpstreamJson(raw);
+  const text = JSON.stringify(sanitized) ?? '';
+  if (text.length > MAX_UPSTREAM_BODY_CHARS) {
+    return { body: text.slice(0, MAX_UPSTREAM_BODY_CHARS), truncated: true, error: null };
+  }
+  return { body: sanitized, truncated: false, error: extractUpstreamError(sanitized) };
+}
+
+function targetString(target: Record<string, unknown>, key: string): string | null {
+  const value = target[key];
+  return typeof value === 'string' ? value : null;
+}
+
 async function abortableSleep(
   ms: number,
   signal: AbortSignal | undefined,
@@ -211,10 +334,29 @@ async function fetchWithPolicy(
         ...(willRetry ? { delayMs } : {}),
       });
       if (!willRetry) {
-        if (timedOut) {
-          throw new AppError(504, 'AI_TIMEOUT', 'Meta AI request timed out', undefined, error);
-        }
-        throw new AppError(502, 'AI_UPSTREAM_ERROR', 'Meta AI request failed', undefined, error);
+        throw new MetaApiError(
+          timedOut ? 504 : 502,
+          timedOut ? 'AI_TIMEOUT' : 'AI_UPSTREAM_ERROR',
+          timedOut ? 'Meta AI request timed out' : 'Meta AI request failed',
+          {
+            provider: 'meta',
+            operation: policy.operation,
+            upstreamEndpoint: targetString(policy.logTarget, 'path'),
+            upstreamHost: targetString(policy.logTarget, 'host'),
+            upstreamStatus: null,
+            upstreamStatusText: null,
+            upstreamError: null,
+            upstreamBody: null,
+            bodyTruncated: false,
+            networkError: {
+              name: error instanceof Error ? error.name : typeof error,
+              codes,
+              timedOut,
+            },
+            reason: null,
+          },
+          error,
+        );
       }
       await abortableSleep(delayMs, policy.signal, policy.sleep);
       continue;
@@ -225,7 +367,8 @@ async function fetchWithPolicy(
     // The key is header-only, never in the body, so a short upstream snippet
     // is safe to log. Never log request headers.
     const status = res.status;
-    const snippet = (await res.text().catch(() => '')).slice(0, MAX_UPSTREAM_LOG_CHARS);
+    const rawBody = await res.text().catch(() => '');
+    const snippet = rawBody.slice(0, MAX_UPSTREAM_LOG_CHARS);
     const retryableStatus =
       (status === 429 && policy.retryRateLimit) ||
       ((status === 408 || status >= 500) && policy.retryServerError);
@@ -246,7 +389,20 @@ async function fetchWithPolicy(
       ...(willRetry ? { delayMs } : {}),
     });
     if (!willRetry) {
-      throw new AppError(502, 'AI_UPSTREAM_ERROR', 'Meta AI request failed');
+      const described = describeUpstreamBody(rawBody);
+      throw new MetaApiError(502, 'AI_UPSTREAM_ERROR', 'Meta AI request failed', {
+        provider: 'meta',
+        operation: policy.operation,
+        upstreamEndpoint: targetString(policy.logTarget, 'path'),
+        upstreamHost: targetString(policy.logTarget, 'host'),
+        upstreamStatus: status,
+        upstreamStatusText: res.statusText || null,
+        upstreamError: described.error,
+        upstreamBody: described.body,
+        bodyTruncated: described.truncated,
+        networkError: null,
+        reason: null,
+      });
     }
     await abortableSleep(delayMs, policy.signal, policy.sleep);
   }
@@ -296,33 +452,47 @@ export async function postMetaJson(
     { ...policy, logTarget: { path }, timeoutMs },
   );
 
-  console.log(' =======');
-  console.log('ERROR ON res', res);
-  console.log(' =======');
-  console.log('path', `${baseUrl}${path}`);
-  console.log('Body', body);
-
-  const payload: unknown = await res.json().catch(() => undefined);
+  const rawBody = await res.text().catch(() => '');
+  let payload: unknown;
+  try {
+    payload = rawBody === '' ? undefined : (JSON.parse(rawBody) as unknown);
+  } catch {
+    payload = undefined;
+  }
   if (payload === undefined) {
     logger.warn('meta ai returned invalid json', {
       operation: policy.operation,
       path,
       status: res.status,
     });
-    console.log(' =======');
-    console.log('ERROR ON res after payload', res);
-    console.log(' =======');
 
-    throw new AppError(502, 'AI_UPSTREAM_ERROR', 'Meta AI request failed');
+    const described = describeUpstreamBody(rawBody);
+    throw new MetaApiError(502, 'AI_UPSTREAM_ERROR', 'Meta AI request failed', {
+      provider: 'meta',
+      operation: policy.operation,
+      upstreamEndpoint: path,
+      upstreamHost: null,
+      upstreamStatus: res.status,
+      upstreamStatusText: res.statusText || null,
+      upstreamError: described.error,
+      upstreamBody: described.body,
+      bodyTruncated: described.truncated,
+      networkError: null,
+      reason: 'invalid-json',
+    });
   }
   return payload;
 }
 
 /**
  * Throws when a Responses API payload reports a failed generation.
- * Upstream error details stay in the logs; the client gets a generic 502.
+ * Upstream error details stay in the logs; clients get a generic 502, except
+ * /api/ai/test, which additionally serializes the attached diagnostics.
  */
-export function assertResponseCompleted(payload: unknown): void {
+export function assertResponseCompleted(
+  payload: unknown,
+  context: { endpoint: string; operation: string },
+): void {
   if (!isRecord(payload) || payload['status'] !== 'failed') {
     return;
   }
@@ -331,10 +501,20 @@ export function assertResponseCompleted(payload: unknown): void {
     code: typeof failure?.['code'] === 'string' ? failure['code'] : 'unknown',
     message: typeof failure?.['message'] === 'string' ? failure['message'] : 'unknown',
   });
-  console.log(' =======');
-  console.log('ERROR ON failure', failure);
-  console.log(' =======');
-  throw new AppError(502, 'AI_UPSTREAM_ERROR', 'Meta AI request failed');
+  const described = describeUpstreamBody(payload);
+  throw new MetaApiError(502, 'AI_UPSTREAM_ERROR', 'Meta AI request failed', {
+    provider: 'meta',
+    operation: context.operation,
+    upstreamEndpoint: context.endpoint,
+    upstreamHost: null,
+    upstreamStatus: null,
+    upstreamStatusText: null,
+    upstreamError: described.error,
+    upstreamBody: described.body,
+    bodyTruncated: described.truncated,
+    networkError: null,
+    reason: 'generation-failed',
+  });
 }
 
 function safeHost(url: string): string {

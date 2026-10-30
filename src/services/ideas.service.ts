@@ -470,7 +470,7 @@ export async function generateIdeasFromPhoto(
     SPARK_TIMEOUT_MS,
     { operation: 'generate-ideas', signal: deps.signal },
   );
-  assertResponseCompleted(sparkPayload);
+  assertResponseCompleted(sparkPayload, { endpoint: '/responses', operation: 'generate-ideas' });
 
   const answerText = extractAnswerText(sparkPayload);
   if (!answerText) {

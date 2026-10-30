@@ -20,6 +20,24 @@ interface ErrorBody {
   error: { code: string; message: string };
 }
 
+interface TestDebugBody {
+  success: boolean;
+  error: { code: string; message: string };
+  debug: {
+    provider: string;
+    operation: string;
+    upstreamEndpoint: string | null;
+    upstreamHost: string | null;
+    upstreamStatus: number | null;
+    upstreamStatusText: string | null;
+    upstreamError: Record<string, unknown> | null;
+    upstreamBody: unknown;
+    bodyTruncated: boolean;
+    networkError: { name: string; codes: string[]; timedOut: boolean } | null;
+    reason: string | null;
+  };
+}
+
 const PROMPT = 'Suggest three ways to reuse an empty plastic bottle.';
 
 function metaResponse(output: unknown[]): Record<string, unknown> {
@@ -142,6 +160,7 @@ describe('POST /api/ai/test', () => {
     expect(body.success).toBe(true);
     expect(body.data.model).toBe(META_TEST_MODEL);
     expect(body.data.answer).toBe('Reuse it as a planter.');
+    expect(res.body).not.toContain('"debug"');
     expect(res.body).not.toContain('Bearer');
     if (env.modelApiKey) {
       expect(res.body).not.toContain(env.modelApiKey);
@@ -225,5 +244,143 @@ describe('POST /api/ai/test', () => {
     expect(mock).toHaveBeenCalledTimes(2);
     expect(res.statusCode).toBe(200);
     expect(parseJson<AiSuccessBody>(res).data.answer).toBe('Reuse it!');
+  });
+
+  it('exposes the upstream error for a 404 model_not_found response', async () => {
+    const upstream = {
+      error: {
+        code: 'model_not_found',
+        message: 'The requested model was not found.',
+        type: 'invalid_request_error',
+        param: null,
+      },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockResolvedValue(
+        new Response(JSON.stringify(upstream), {
+          status: 404,
+          statusText: 'Not Found',
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      ),
+    );
+    const token = await registerAndGetToken();
+
+    const res = await postAiTest(token);
+
+    expect(res.statusCode).toBe(502);
+    const body = parseJson<TestDebugBody>(res);
+    expect(body.error).toEqual({ code: 'AI_UPSTREAM_ERROR', message: 'Meta AI request failed' });
+    expect(body.debug).toEqual({
+      provider: 'meta',
+      operation: 'ai-test',
+      upstreamEndpoint: '/responses',
+      upstreamHost: null,
+      upstreamStatus: 404,
+      upstreamStatusText: 'Not Found',
+      upstreamError: upstream.error,
+      upstreamBody: upstream,
+      bodyTruncated: false,
+      networkError: null,
+      reason: null,
+    });
+  });
+
+  it('exposes a 401 while redacting sensitive upstream fields', async () => {
+    const upstream = {
+      error: {
+        code: 'invalid_key',
+        message: 'bad key',
+        api_key: 'alpha-bravo-1',
+        nested: { authorization: 'charlie-delta-2' },
+      },
+    };
+    stubFetchJson(upstream, 401);
+    const token = await registerAndGetToken();
+
+    const res = await postAiTest(token);
+
+    expect(res.statusCode).toBe(502);
+    const body = parseJson<TestDebugBody>(res);
+    expect(body.debug.upstreamStatus).toBe(401);
+    expect(body.debug.upstreamError).toEqual({
+      code: 'invalid_key',
+      message: 'bad key',
+      api_key: '[REDACTED]',
+      nested: { authorization: '[REDACTED]' },
+    });
+    expect(res.body).toContain('[REDACTED]');
+    expect(res.body).not.toContain('alpha-bravo-1');
+    expect(res.body).not.toContain('charlie-delta-2');
+    if (env.modelApiKey) {
+      expect(res.body).not.toContain(env.modelApiKey);
+    }
+  });
+
+  it('exposes network failure diagnostics without an upstream response', async () => {
+    const failure = new TypeError('fetch failed', {
+      cause: new AggregateError(
+        [Object.assign(new Error('connect ETIMEDOUT'), { code: 'ETIMEDOUT' })],
+        'fetch failed',
+      ),
+    });
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockRejectedValue(failure));
+    const token = await registerAndGetToken();
+
+    const res = await postAiTest(token);
+
+    expect(res.statusCode).toBe(502);
+    const body = parseJson<TestDebugBody>(res);
+    expect(body.error.code).toBe('AI_UPSTREAM_ERROR');
+    expect(body.debug.upstreamEndpoint).toBe('/responses');
+    expect(body.debug.upstreamStatus).toBeNull();
+    expect(body.debug.upstreamBody).toBeNull();
+    expect(body.debug.networkError).toEqual({
+      name: 'TypeError',
+      codes: ['ETIMEDOUT'],
+      timedOut: false,
+    });
+    expect(body.debug.reason).toBeNull();
+  });
+
+  it('exposes failed generations and textless responses with a reason', async () => {
+    const token = await registerAndGetToken();
+
+    stubFetchJson({
+      ...metaResponse([]),
+      status: 'failed',
+      error: { code: 'generation_failed', message: 'boom' },
+    });
+    const failed = await postAiTest(token);
+    expect(failed.statusCode).toBe(502);
+    const failedBody = parseJson<TestDebugBody>(failed);
+    expect(failedBody.debug.reason).toBe('generation-failed');
+    expect(failedBody.debug.upstreamError).toEqual({ code: 'generation_failed', message: 'boom' });
+
+    stubFetchJson(metaResponse([]));
+    const res = await postAiTest(token);
+    expect(res.statusCode).toBe(502);
+    const body = parseJson<TestDebugBody>(res);
+    expect(body.debug.reason).toBe('no-text-output');
+    expect(body.debug.upstreamEndpoint).toBe('/responses');
+    expect(body.debug.upstreamBody).toMatchObject({ status: 'completed', output: [] });
+  });
+
+  it('exposes invalid upstream JSON with its status and raw body', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockResolvedValue(new Response('not-json{', { status: 200 })),
+    );
+    const token = await registerAndGetToken();
+
+    const res = await postAiTest(token);
+
+    expect(res.statusCode).toBe(502);
+    const body = parseJson<TestDebugBody>(res);
+    expect(body.debug.reason).toBe('invalid-json');
+    expect(body.debug.upstreamStatus).toBe(200);
+    expect(body.debug.upstreamBody).toBe('not-json{');
+    expect(body.debug.bodyTruncated).toBe(false);
   });
 });

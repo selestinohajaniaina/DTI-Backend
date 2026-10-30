@@ -480,5 +480,7 @@ describe('POST /api/ai/generate-ideas', () => {
 
     expect(res.statusCode).toBe(502);
     expect(parseJson<ErrorBody>(res).error.code).toBe('AI_UPSTREAM_ERROR');
+    // The debug block is exclusive to POST /api/ai/test.
+    expect(res.body).not.toContain('"debug"');
   });
 });

@@ -1,6 +1,12 @@
 import { AppError } from '../utils/errors';
 import { logger } from '../utils/logger';
-import { assertResponseCompleted, isRecord, postMetaJson } from './meta.client';
+import {
+  MetaApiError,
+  assertResponseCompleted,
+  describeUpstreamBody,
+  isRecord,
+  postMetaJson,
+} from './meta.client';
 
 export const META_RESPONSES_URL = 'https://api.meta.ai/v1/responses';
 export const META_TEST_MODEL = 'muse-spark-1.3';
@@ -76,12 +82,25 @@ export async function runAiTest(
     REQUEST_TIMEOUT_MS,
     { operation: 'ai-test', signal },
   );
-  assertResponseCompleted(payload);
+  assertResponseCompleted(payload, { endpoint: '/responses', operation: 'ai-test' });
 
   const answer = extractAnswerText(payload);
   if (!answer) {
     logger.warn('meta ai returned no text output', { model: META_TEST_MODEL });
-    throw new AppError(502, 'AI_UPSTREAM_ERROR', 'Meta AI returned no text output');
+    const described = describeUpstreamBody(payload);
+    throw new MetaApiError(502, 'AI_UPSTREAM_ERROR', 'Meta AI returned no text output', {
+      provider: 'meta',
+      operation: 'ai-test',
+      upstreamEndpoint: '/responses',
+      upstreamHost: null,
+      upstreamStatus: null,
+      upstreamStatusText: null,
+      upstreamError: described.error,
+      upstreamBody: described.body,
+      bodyTruncated: described.truncated,
+      networkError: null,
+      reason: 'no-text-output',
+    });
   }
   const model =
     isRecord(payload) && typeof payload['model'] === 'string' ? payload['model'] : META_TEST_MODEL;
