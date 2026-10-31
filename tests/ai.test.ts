@@ -26,6 +26,8 @@ interface TestDebugBody {
   debug: {
     provider: string;
     operation: string;
+    requestedModel: string | null;
+    configuredModelSource: string | null;
     upstreamEndpoint: string | null;
     upstreamHost: string | null;
     upstreamStatus: number | null;
@@ -275,6 +277,8 @@ describe('POST /api/ai/test', () => {
     expect(body.debug).toEqual({
       provider: 'meta',
       operation: 'ai-test',
+      requestedModel: 'muse-spark-1.3',
+      configuredModelSource: 'hardcoded:META_TEST_MODEL',
       upstreamEndpoint: '/responses',
       upstreamHost: null,
       upstreamStatus: 404,
@@ -333,6 +337,8 @@ describe('POST /api/ai/test', () => {
     expect(res.statusCode).toBe(502);
     const body = parseJson<TestDebugBody>(res);
     expect(body.error.code).toBe('AI_UPSTREAM_ERROR');
+    expect(body.debug.requestedModel).toBe('muse-spark-1.3');
+    expect(body.debug.configuredModelSource).toBe('hardcoded:META_TEST_MODEL');
     expect(body.debug.upstreamEndpoint).toBe('/responses');
     expect(body.debug.upstreamStatus).toBeNull();
     expect(body.debug.upstreamBody).toBeNull();

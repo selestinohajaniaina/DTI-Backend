@@ -390,6 +390,7 @@ async function generateAndStoreImage(
       signal: deps.signal,
       maxRetries: 1,
       retryServerError: false,
+      modelSource: 'hardcoded:IMAGE_MODEL',
     },
   );
   const image = firstImageBytes(payload);
@@ -468,9 +469,14 @@ export async function generateIdeasFromPhoto(
     },
     apiKey,
     SPARK_TIMEOUT_MS,
-    { operation: 'generate-ideas', signal: deps.signal },
+    { operation: 'generate-ideas', signal: deps.signal, modelSource: 'hardcoded:SPARK_MODEL' },
   );
-  assertResponseCompleted(sparkPayload, { endpoint: '/responses', operation: 'generate-ideas' });
+  assertResponseCompleted(sparkPayload, {
+    endpoint: '/responses',
+    operation: 'generate-ideas',
+    requestedModel: SPARK_MODEL,
+    modelSource: 'hardcoded:SPARK_MODEL',
+  });
 
   const answerText = extractAnswerText(sparkPayload);
   if (!answerText) {

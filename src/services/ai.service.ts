@@ -80,9 +80,14 @@ export async function runAiTest(
     { model: META_TEST_MODEL, input: prompt },
     apiKey,
     REQUEST_TIMEOUT_MS,
-    { operation: 'ai-test', signal },
+    { operation: 'ai-test', signal, modelSource: 'hardcoded:META_TEST_MODEL' },
   );
-  assertResponseCompleted(payload, { endpoint: '/responses', operation: 'ai-test' });
+  assertResponseCompleted(payload, {
+    endpoint: '/responses',
+    operation: 'ai-test',
+    requestedModel: META_TEST_MODEL,
+    modelSource: 'hardcoded:META_TEST_MODEL',
+  });
 
   const answer = extractAnswerText(payload);
   if (!answer) {
@@ -91,6 +96,8 @@ export async function runAiTest(
     throw new MetaApiError(502, 'AI_UPSTREAM_ERROR', 'Meta AI returned no text output', {
       provider: 'meta',
       operation: 'ai-test',
+      requestedModel: META_TEST_MODEL,
+      configuredModelSource: 'hardcoded:META_TEST_MODEL',
       upstreamEndpoint: '/responses',
       upstreamHost: null,
       upstreamStatus: null,

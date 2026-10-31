@@ -221,6 +221,8 @@ describe('postMetaJson', () => {
       debug: {
         provider: 'meta',
         operation: 'meta-json',
+        requestedModel: null,
+        configuredModelSource: null,
         upstreamEndpoint: '/responses',
         upstreamStatus: null,
         networkError: { name: 'TimeoutError', codes: [], timedOut: true },

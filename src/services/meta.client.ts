@@ -41,6 +41,8 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 export interface MetaRequestOptions {
   /** Short label for logs, e.g. 'generate-ideas'. */
   operation?: string;
+  /** Provenance label for the request's model value (debug only). */
+  modelSource?: string | null;
   /** External cancellation (client disconnect). Never retried once aborted. */
   signal?: AbortSignal;
   /** Retries after the initial attempt. Defaults to DEFAULT_MAX_RETRIES. */
@@ -129,6 +131,10 @@ export interface MetaNetworkErrorDebug {
 export interface MetaUpstreamDebug {
   provider: 'meta';
   operation: string;
+  /** Exact `model` value sent on the wire (JSON bodies only). */
+  requestedModel: string | null;
+  /** Where the model value came from (e.g. 'hardcoded:META_TEST_MODEL'). */
+  configuredModelSource: string | null;
   upstreamEndpoint: string | null;
   upstreamHost: string | null;
   upstreamStatus: number | null;
@@ -233,6 +239,14 @@ function targetString(target: Record<string, unknown>, key: string): string | nu
   return typeof value === 'string' ? value : null;
 }
 
+/** Reads the exact `model` value from a JSON request body, if present. */
+export function extractRequestedModel(body: unknown): string | null {
+  if (isRecord(body) && typeof body['model'] === 'string') {
+    return body['model'];
+  }
+  return null;
+}
+
 async function abortableSleep(
   ms: number,
   signal: AbortSignal | undefined,
@@ -267,6 +281,10 @@ function cancelledError(cause?: unknown): AppError {
 
 interface FetchPolicy {
   operation: string;
+  /** Exact `model` value sent (JSON bodies only; debug only). */
+  requestedModel?: string | null;
+  /** Provenance label for the model value (debug only). */
+  modelSource?: string | null;
   /** Sanitized target: `{ path }` for Meta calls, `{ host }` for downloads. */
   logTarget: Record<string, unknown>;
   timeoutMs: number;
@@ -341,6 +359,8 @@ async function fetchWithPolicy(
           {
             provider: 'meta',
             operation: policy.operation,
+            requestedModel: policy.requestedModel ?? null,
+            configuredModelSource: policy.modelSource ?? null,
             upstreamEndpoint: targetString(policy.logTarget, 'path'),
             upstreamHost: targetString(policy.logTarget, 'host'),
             upstreamStatus: null,
@@ -393,6 +413,8 @@ async function fetchWithPolicy(
       throw new MetaApiError(502, 'AI_UPSTREAM_ERROR', 'Meta AI request failed', {
         provider: 'meta',
         operation: policy.operation,
+        requestedModel: policy.requestedModel ?? null,
+        configuredModelSource: policy.modelSource ?? null,
         upstreamEndpoint: targetString(policy.logTarget, 'path'),
         upstreamHost: targetString(policy.logTarget, 'host'),
         upstreamStatus: status,
@@ -416,6 +438,7 @@ function resolvePolicy(
 ): Omit<FetchPolicy, 'logTarget' | 'timeoutMs'> {
   return {
     operation: options.operation ?? operation,
+    modelSource: options.modelSource ?? null,
     signal: options.signal,
     maxRetries: options.maxRetries ?? DEFAULT_MAX_RETRIES,
     retryRateLimit: options.retryRateLimit ?? true,
@@ -449,7 +472,7 @@ export async function postMetaJson(
       },
       body: JSON.stringify(body),
     },
-    { ...policy, logTarget: { path }, timeoutMs },
+    { ...policy, logTarget: { path }, timeoutMs, requestedModel: extractRequestedModel(body) },
   );
 
   const rawBody = await res.text().catch(() => '');
@@ -470,6 +493,8 @@ export async function postMetaJson(
     throw new MetaApiError(502, 'AI_UPSTREAM_ERROR', 'Meta AI request failed', {
       provider: 'meta',
       operation: policy.operation,
+      requestedModel: extractRequestedModel(body),
+      configuredModelSource: policy.modelSource ?? null,
       upstreamEndpoint: path,
       upstreamHost: null,
       upstreamStatus: res.status,
@@ -491,7 +516,7 @@ export async function postMetaJson(
  */
 export function assertResponseCompleted(
   payload: unknown,
-  context: { endpoint: string; operation: string },
+  context: { endpoint: string; operation: string; requestedModel: string; modelSource: string },
 ): void {
   if (!isRecord(payload) || payload['status'] !== 'failed') {
     return;
@@ -505,6 +530,8 @@ export function assertResponseCompleted(
   throw new MetaApiError(502, 'AI_UPSTREAM_ERROR', 'Meta AI request failed', {
     provider: 'meta',
     operation: context.operation,
+    requestedModel: context.requestedModel,
+    configuredModelSource: context.modelSource,
     upstreamEndpoint: context.endpoint,
     upstreamHost: null,
     upstreamStatus: null,
