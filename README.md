@@ -1,400 +1,171 @@
-# DTI Backend — Don't Trash It
+# DTI BACKEND — DON'T TRASH IT
 
-Express + TypeScript backend foundation for **DTI (Don't Trash It)**, an AI-powered
-upcycling platform. This package contains the infrastructure only: HTTP server,
-PostgreSQL access, authentication primitives, migrations, tests, and AI routes.
-Business features come later.
+The backend for **DTI (DON'T TRASH)** ()
 
-Frontend (Angular, untouched by this package): [`../DTI`](../DTI).
+> **Built from scratch starting October 26, 2026, during the Meta Global AI Developer Hackathon.**
 
-## Stack
+---
 
-| Concern    | Choice                                                              |
-| ---------- | ------------------------------------------------------------------- |
-| Runtime    | Node.js 24 LTS (see `.nvmrc`), npm                                  |
-| HTTP       | Express 5, Helmet, CORS                                             |
-| Language   | TypeScript (strict), ESLint, Prettier                               |
-| Database   | External PostgreSQL via `DATABASE_URL`, Sequelize 6 (no decorators) |
-| Migrations | Umzug (`src/migrations/*.ts`)                                       |
-| Auth       | `jsonwebtoken` access tokens, `bcrypt` password hashing             |
-| Validation | Zod (env at startup, request bodies per route)                      |
-| Tests      | Vitest + `light-my-request` against a real test database            |
+**Frontend repository:** https://github.com/selestinohajaniaina/DTI
 
-## Architecture
+
+---
+
+## META AI INTEGRATION
+
+| Meta model | Responsibility |
+|---|---|
+| `muse-spark-1.3` — Muse Spark | Analyzes uploaded photographs and generates structured upcycling ideas. |
+| `muse-image-1.0` — Muse Image | Generates illustrations for the proposed projects using the original photograph as a visual reference. |
+
+### HOW THE AI WORKS
+
+1. **Image upload:** The client sends an object's photograph to the backend.
+2. **Visual analysis:** Muse Spark analyzes the image and identifies the object's characteristics.
+3. **Idea generation:** Muse Spark generates structured reuse ideas, including descriptions, tutorials, materials, tools, difficulty, time estimates, safety notes, and price estimates.
+4. **Image generation:** Muse Image creates an illustration for each generated idea.
+5. **Validation:** The backend validates the structured AI response using Zod.
+6. **Persistence:** The source object and generated ideas are saved in PostgreSQL.
+7. **API response:** The backend returns the generated content and image URLs to the frontend.
+---
+
+## Technology Stack
+
+| Category | Technology |
+|---|---|
+| Runtime | Node.js 22 |
+| Language | TypeScript |
+| HTTP framework | Express 5 |
+| Database | PostgreSQL |
+| ORM | Sequelize 6 |
+| Migrations | Umzug |
+| Validation | Zod |
+| Authentication | JWT and bcrypt |
+| AI integration | Meta Muse API |
+| Testing | Vitest |
+| Code quality | ESLint and Prettier |
+
+---
+
+## ARCHITECTURE
 
 ```text
 src/
-  server.ts            # Boot: env -> DB wait -> migrations -> listen -> shutdown
-  app.ts               # Express factory (no listen; used by server and tests)
-  config/
-    env.ts             # Zod-validated env, fail fast; resolves DATABASE_URL
-    database.ts        # Sequelize instance, pool, waitForDatabase()
-    umzug.ts           # Migration runner (glob for app, inline list for tests)
-  migrations/          # Versioned schema changes (*.ts; compiled to dist/)
-  models/              # Explicit Sequelize models (User) + initModels()
-  routes/              # /api/health, /api/auth
-  controllers/         # Thin HTTP layer (status codes, envelopes)
-  services/            # Business logic (register/login/profile)
-  middlewares/         # auth, validate, request logger, 404, central errors
-  validators/          # Zod request schemas
-  seeders/             # Idempotent dev seed (demo user)
-  scripts/             # migrate / seed CLIs
-  types/               # JWT payload, PublicUser, req.user augmentation
-  utils/               # logger, errors, response envelopes, jwt, password
-tests/                 # Vitest suite (health + auth, real Postgres)
+├── app.ts
+├── server.ts
+│
+├── config/
+│   ├── env.ts
+│   ├── database.ts
+│   └── umzug.ts
+│
+├── controllers/
+├── services/
+├── routes/
+├── middlewares/
+├── validators/
+├── models/
+├── migrations/
+├── seeders/
+├── scripts/
+├── types/
+└── utils/
+    
+tests/
 ```
 
-Notes on conventions:
+### Main architectural responsibilities
 
-- JSON responses always use `{ success: true, data }` or
-  `{ success: false, error: { code, message, details? } }`.
-- Controllers never touch the database directly; services never touch HTTP.
-- No `sequelize.sync()` in the app: schema changes go through migrations only.
-- Migrations live under `src/` (not repo root) so `tsc` compiles them into
-  `dist/` and the production deploy can run them from compiled JS.
-- No refresh tokens yet: short-lived access tokens only (default 15 minutes).
-  Refresh rotation can be added later with server-side reuse detection.
+- **Routes:** API Endpoints.
+- **Controllers:** Handle HTTP requests and responses.
+- **Services:** Implement application logic and operations.
+- **Models:** Define PostgreSQL data structures using Sequelize.
+- **Middlewares:** Authentication, validation, logging, and errors.
+- **Validators:** Validate the coming requests and application data.
+- **Migrations:** Manage database schema changes.
+- **Configuration:** Environment variables and database connections.
 
-## Prerequisites
+---
 
-- Node.js 24 LTS (`nvm use`, or match `.nvmrc`) and npm 10+.
-- A reachable PostgreSQL instance: a managed provider (e.g. Render, Neon,
-  Supabase) or a local PostgreSQL server. No Docker required.
-- The Angular frontend runs separately on <http://localhost:4200> by default.
+## DATABASE
 
-## Environment setup
+DTI uses PostgreSQL to persist generated content and user information.
+
+---
+
+## INSTALLATION LOCAL
+
+### REQUIREMENTS
+
+- Node.js 22 or compatible version specified in `.nvmrc`.
+- npm 10 or later.
+- PostgreSQL database.
+- Meta API key for AI generation features.
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/selestinohajaniaina/DTI-Backend.git
+
+cd DTI-Backend
+```
+
+### 2. Install dependencies
+
+```bash
+npm ci
+```
+
+### 3. Configure environment variables
 
 ```bash
 cp .env.example .env
 cp .env.test.example .env.test
-# Edit both files: set DATABASE_URL, JWT_SECRET (32+ chars), etc.
-# Generate a secret: node -e "console.log(require('crypto').randomBytes(48).toString('base64'))"
 ```
 
-Never commit `.env` or `.env.test` (both are gitignored). All variables are
-validated with Zod at startup; the process exits with a clear error when
-required values are missing or malformed. Only field names are ever reported,
-never values.
+Configure the required values in `.env`:
 
-Database connection: set `DATABASE_URL`, or the `DB_HOST`/`DB_PORT`/`DB_NAME`/
-`DB_USER`/`DB_PASSWORD` parts (the app composes a URL-encoded connection
-string). Tests require `TEST_DATABASE_URL` pointing at a **dedicated database
-whose name contains `test`** — anything else is refused so the suite can never
-truncate dev/prod data.
+```env
+NODE_ENV=development
+PORT=3000
 
-## Local development
+DATABASE_URL=postgres://USER:PASSWORD@localhost:5432/DATABASE_NAME
 
-Point `DATABASE_URL` at any reachable PostgreSQL (managed provider or local
-server), then:
+JWT_SECRET=your_secure_random_secret
+JWT_EXPIRES_IN=15m
+
+MODEL_API_KEY=your_meta_api_key
+FRONTEND_URL=http://localhost:4200
+```
+
+The complete list of supported variables and defaults is documented in `.env.example`.
+
+### 4. Run database migrations
 
 ```bash
-npm ci
-npm run db:migrate                # create tables (required before `npm start`)
-npm run dev                       # API on http://127.0.0.1:3000 with live reload
+npm run db:migrate
 ```
 
-Optional demo account: `npm run db:seed` creates `demo@dti.local / ChangeMe123!`
-(refused in production unless `ALLOW_SEED_IN_PRODUCTION=true`).
-
-Stop the server with `Ctrl+C`.
-
-## Production build and deploy (Render)
-
-Build and run the compiled output with `NODE_ENV=production`:
+### 5. Start the server
 
 ```bash
-npm ci
-npm run build                     # tsc emit to dist/
-NODE_ENV=production npm start     # node dist/server.js
+npm run dev
 ```
 
-The server listens on `HOST` (defaults to `0.0.0.0`) and `PORT` (defaults to
-`3000`; Render injects its own `PORT`). Leave `HOST` unset on Render.
+The API will be available at:
 
-Render web service settings (native Node runtime):
-
-- Build command: `npm ci && npm run build`
-- Start command: `npm start`
-- Health check path: `/api/health`
-
-Required environment variables on Render:
-
-| Variable                     | Value                                                                 |
-| ---------------------------- | --------------------------------------------------------------------- |
-| `NODE_ENV`                   | `production`                                                          |
-| `DATABASE_URL`               | Render Postgres **internal** URL (auto-filled when linked)            |
-| `DB_SSL`                     | `true`                                                                |
-| `DB_SSL_REJECT_UNAUTHORIZED` | `false` (Render internal certs are self-signed — see below)           |
-| `JWT_SECRET`                 | Random secret, 32+ characters                                         |
-| `JWT_EXPIRES_IN`             | `15m` (optional, this is the default)                                 |
-| `FRONTEND_URL`               | `https://dti-ai.vercel.app` (or unset: the default already allows it) |
-| `MODEL_API_KEY`              | Meta API key (only needed for `/api/ai/*`)                            |
-
-TLS note: Render internal database connections use self-signed certificates
-(Render documents `sslmode=require`, with `verify-ca`/`verify-full`
-unsupported), so `DB_SSL_REJECT_UNAUTHORIZED=false` is required there. For
-external URLs or providers with valid certificates (Neon, Supabase, ...),
-keep the default `true` so certificates are verified.
-
-Migrations run exclusively via `npm run db:migrate` (additive only — never
-`sync({ alter|force })`). Render runs `npm run db:migrate && npm start`, so a
-migration failure already prevents startup; the server itself never applies
-migrations, it only verifies the schema is current at boot and refuses to
-start when behind. To migrate manually instead, run from any machine with
-network access to the database:
-
-```bash
-DATABASE_URL='<external-url>' DB_SSL=true npm run db:migrate
+```text
+http://127.0.0.1:3000
 ```
 
-Uploads note: generated images are stored on local disk under `UPLOAD_DIR`.
-On Render without a persistent disk, that directory is ephemeral and files
-disappear on redeploy — attach a disk or move to object storage if the
-generated images must survive restarts.
+Health check:
 
-## Database
-
-```bash
-npm run db:migrate          # apply pending migrations
-npm run db:migrate:undo     # revert the most recent migration
-npm run db:migrate:status   # show executed vs pending
-npm run db:seed             # idempotent dev seed
+```text
+http://127.0.0.1:3000/api/health
 ```
 
-New migration: add `src/migrations/<timestamp>-<name>.ts` exporting `up`/`down`
-(Umzug style, see the initial `create-users` migration), then register it in
-`tests/setup.ts` so the suite can import it statically.
+---
 
-Data lifecycle: the database is managed by your PostgreSQL provider (backups,
-restores, and resets all happen there), never by this package.
+## Development Assistance
 
-## Testing, linting, build
-
-```bash
-npm test            # Vitest suite (needs TEST_DATABASE_URL database to exist)
-npm run test:watch  # watch mode
-npm run typecheck   # tsc --noEmit (strict)
-npm run lint        # ESLint (type-aware)
-npm run format      # Prettier write
-npm run build       # tsc emit to dist/
-npm start           # run compiled production server (node dist/server.js)
-```
-
-The suite (17 tests) covers health/readiness/404, registration validation,
-hashing, duplicate handling (including concurrent duplicates), login
-success/failure, and JWT protection of `/api/auth/me` (missing, malformed,
-invalid, expired tokens). Tests run sequentially against the isolated test
-database and need no listening ports.
-
-## API reference
-
-Base URL (dev): `http://127.0.0.1:3000`
-
-| Method | Path                     | Auth   | Description                                                          |
-| ------ | ------------------------ | ------ | -------------------------------------------------------------------- |
-| GET    | `/api/health`            | no     | Liveness (`{ status: "ok", ... }`)                                   |
-| GET    | `/api/health/ready`      | no     | Readiness (checks DB, 503 if down)                                   |
-| POST   | `/api/auth/register`     | no     | Register; 201 `{ user, token }`                                      |
-| POST   | `/api/auth/login`        | no     | Login; 200 `{ user, token }`                                         |
-| GET    | `/api/auth/me`           | Bearer | Current user; 401 without valid JWT                                  |
-| POST   | `/api/ai/test`           | Bearer | Meta AI test prompt; 200 `{ model, answer }`                         |
-| POST   | `/api/ai/generate-ideas` | no     | Photo-to-ideas (multipart `image`); 200 `{ sourceObject, ideas[N] }` |
-
-Sample requests:
-
-```bash
-curl -X POST http://127.0.0.1:3000/api/auth/register \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"Ada","email":"ada@example.com","password":"Sup3rSecret!"}'
-
-TOKEN=$(curl -s -X POST http://127.0.0.1:3000/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"ada@example.com","password":"Sup3rSecret!"}' \
-  | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).data.token))")
-
-curl http://127.0.0.1:3000/api/auth/me -H "Authorization: Bearer $TOKEN"
-```
-
-Error codes: `VALIDATION_ERROR`, `INVALID_JSON`, `NOT_FOUND`, `EMAIL_TAKEN`
-(409), `INVALID_CREDENTIALS` (401, same for unknown email and wrong password),
-`MISSING_TOKEN` / `INVALID_TOKEN` / `TOKEN_EXPIRED` (401), `USER_NOT_FOUND`,
-`CONFLICT` (409), `DATABASE_UNAVAILABLE` (503), `AI_NOT_CONFIGURED` (503),
-`AI_UPSTREAM_ERROR` (502), `AI_TIMEOUT` (504), `FILE_TOO_LARGE` (413),
-`INTERNAL_ERROR` (500, no internals leaked in production).
-
-### AI test route (Postman)
-
-1. Set `MODEL_API_KEY` in `.env` (create one on the
-   [Meta dashboard](https://dev.meta.ai)) and restart the API.
-2. Register and log in to obtain a token (see Sample requests above).
-3. Call the route:
-
-```bash
-curl -X POST http://127.0.0.1:3000/api/ai/test \
-  -H "Authorization: Bearer $TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"prompt":"Suggest three ways to reuse an empty plastic bottle."}'
-```
-
-Without a key the route answers `503 AI_NOT_CONFIGURED`. Meta failures map to
-`502 AI_UPSTREAM_ERROR` (or `504 AI_TIMEOUT`) without leaking internals. The
-key travels in the server-side `Authorization` header only.
-
-### Meta connection resilience
-
-Every Meta call runs with a per-attempt timeout (30 s for `/api/ai/test`,
-180 s per generation phase) and a small bounded retry policy:
-
-- Transient network failures (`ETIMEDOUT`, `ECONNRESET`, …) and our own
-  timeouts are retried with exponential backoff and jitter.
-- HTTP `429` is retried honoring `Retry-After` (capped at 30 s); HTTP
-  `408`/`5xx` are retried for text calls.
-- HTTP `400`/`401`/`403`/`404`, DNS `ENOTFOUND` and TLS errors fail fast.
-- Image generation retries at most once, and never on `5xx` (the image may
-  already have been generated and billed).
-- Disconnecting the HTTP client aborts in-flight Meta requests including
-  backoff waits (`499 AI_CANCELLED`, only visible server-side).
-
-Failure logs carry `operation`, `phase` (`connection` vs `response`),
-`status`, network `codes` and attempt counts — never keys, headers or
-image bytes — and the original error is preserved as the `AppError`
-cause for diagnosis.
-
-### Upcycling ideas (prototype)
-
-`POST /api/ai/generate-ideas` accepts `multipart/form-data` with an `image`
-field (JPEG/PNG/WebP/GIF verified by magic bytes, 10 MB max) and returns
-`{ sourceObject, ideas[N] }`: title, description, difficulty, estimated
-minutes, tutorial (materials, tools, steps, safety notes), an AI-estimated
-price in USD, and an illustration per idea.
-
-The model is asked for `GENERATED_IDEAS_COUNT` ideas (default 5, max 10);
-fewer are returned when the model sends fewer valid, distinct entries.
-Each idea carries the standardized `marketPrice: { status: "estimated",
-currency: "USD", estimatedCost, estimatedSellingPrice }`, where either
-amount is a dollar number with optional cents or `null` when the model
-cannot estimate it reliably. API consumers format amounts for display
-(e.g. `$8.00`). These are rough AI estimates, never verified market
-prices or guaranteed profits. The AI schema carries no currency field on
-purpose: the model only returns amounts, and the server always stamps
-`"USD"` (a rogue model-provided currency is stripped by validation).
-
-Rows stored before the USD switch were converted by migration
-`20261030000001-convert-market-price-to-usd`: MGA amounts divided by the
-documented rate (1 USD = 4512.52 MGA, ExchangeRatesNow.com USD/MGA
-reference rate published 2026-10-26), rounded to cents, with the exact
-original JSON preserved in the `marketPriceMga` archive column, so `down`
-restores the originals byte-for-byte. `not_found` prototype rows need no
-conversion and are untouched. At read time, `normalizeStoredMarketPrice()`
-passes canonical USD rows through and degrades anything else (`not_found`
-rows, unmigrated non-USD rows, malformed values) to empty USD estimates,
-so a foreign-currency amount can never be displayed as dollars.
-
-```bash
-curl -X POST http://127.0.0.1:3000/api/ai/generate-ideas \
-  -F "image=@/path/to/photo.jpg"
-```
-
-Flow: Muse Spark analyzes the photo (JSON-schema-constrained output,
-validated with Zod), then Muse Image (`muse-image-1.0` edits, original photo
-as reference) illustrates each idea in parallel. Generated files are stored
-under `<UPLOAD_DIR>/generated/` and served at `/uploads/...`. A failed
-illustration yields `{ url: null, status: "failed" }` without dropping the
-other ideas. The route is intentionally public for the anonymous demo;
-add auth + rate limiting before any public exposure.
-
-Persistence: every successful generation stores one `source_objects` row
-(original photo key, detected name/material/condition) plus one
-`generated_ideas` row per valid idea (tutorial, safety notes, price
-estimate, image key/status) in a single transaction. Signed-in callers (optional
-`Authorization: Bearer` header) are recorded via `ownerId`; anonymous
-callers are grouped by `anonymousOwnerId`, taken from the
-`X-Anonymous-Owner-Id` header when it holds a valid UUID and
-server-generated otherwise (echoed as `anonymousOwnerId` in the response
-so clients can persist and reuse it). The response adds `sourceObject.id`,
-per-idea `ideaId`, and `anonymousOwnerId` to the existing shape. Only
-storage keys live in PostgreSQL — image bytes stay on disk under
-`UPLOAD_DIR` (`source/` for originals, `generated/` for illustrations),
-so files still need a persistent disk (or object storage) to survive
-redeploys; see the deploy section above.
-
-### Ideas library (read API)
-
-`GET /api/ai/ideas` lists the caller's saved ideas, paginated:
-`q` (searches title, description, intended use, source name),
-`sourceObjectId`, `difficulty`, `hasPrice`, `sort`
-(`newest|oldest|title|priceAsc|priceDesc`, null prices always last),
-`page` (default 1), `limit` (default 12, max 50). Answers
-`{ items, page, limit, total, totalPages }`; stored `marketPrice`
-shapes are normalized via `normalizeStoredMarketPrice()` and image keys
-are mapped to `/uploads/...` URLs. `GET /api/ai/source-objects` lists
-the caller's source objects (newest first, capped at 100) for filter
-options. Both routes use `optionalAuth` + `resolveOwnership`: Bearer
-callers read their `ownerId` rows, anonymous callers their presented
-`X-Anonymous-Owner-Id` rows, callers with neither receive an empty list.
-Ownership is enforced by scoping the joined source objects, so foreign
-ids simply match nothing. No new indexes were needed: owner lookups use
-the existing `ownerId`/`anonymousOwnerId`/`sourceObjectId` indexes.
-
-### Authentication flow
-
-1. Client POSTs credentials to `/api/auth/register` or `/api/auth/login`.
-2. Server verifies (bcrypt compare), signs a JWT (`sub` = user id, `email`
-   claim, configurable expiry, `JWT_SECRET` stays server-side).
-3. Client sends `Authorization: Bearer <token>` on protected routes.
-4. `requireAuth` verifies signature/expiry and sets typed `req.user`.
-
-## Calling the backend from the Angular frontend
-
-No frontend changes were made in this task. When wiring it up later, the
-Angular app at `../DTI` only needs the base URL (default dev serving on
-`:4200`, backend on `:3000`) — e.g. an `ApiService` with
-`http.post('http://127.0.0.1:3000/api/auth/login', ...)`, storing the returned
-token and attaching it as a Bearer header (an HTTP interceptor). CORS already
-allows `FRONTEND_URL` (default `http://localhost:4200` plus the production
-`https://dti-ai.vercel.app`). Never expose
-`JWT_SECRET`, `DATABASE_URL`, or future AI provider keys to the browser.
-
-## Troubleshooting
-
-- **`Invalid environment configuration` on boot**: a required variable is
-  missing or malformed; the message names each field (never values). Compare
-  `.env` against `.env.example`.
-- **Browser CORS error on the production frontend**: the backend must allow
-  `https://dti-ai.vercel.app`. The code default already does; if
-  `FRONTEND_URL` is set on Render, make sure it includes that origin
-  (comma-separated, no trailing slash). Every app response — including
-  4xx/5xx errors — carries CORS headers for allowed origins, so after the
-  fix the browser shows the real error body instead of a CORS message.
-- **502 Bad Gateway on Render**: first open `GET /api/health` directly. If
-  it also fails, the service itself is unhealthy — Render lists the usual
-  causes (failed deploy, failing health checks, wrong host/port). In
-  particular, never set `HOST=127.0.0.1` on Render (that value is only for
-  local `.env` files): the service must listen on `0.0.0.0`, and the boot
-  log warns when production binds a loopback host. If only
-  `/api/ai/generate-ideas` fails, read the Render logs: `request` lines
-  carry per-request `status`/`durationMs`, and `meta ai ...` warnings carry
-  the upstream status plus a short safe snippet — they distinguish a fast
-  upstream rejection (`AI_UPSTREAM_ERROR`, e.g. bad key or Meta outage)
-  from a slow generation hitting `AI_TIMEOUT` (504, one phase exceeded its
-  180 s budget). Note the load balancer's own error pages carry no CORS
-  headers, so a platform-level 502 always looks like a CORS error in the
-  browser — check the logs, not just the console.
-- **API can't reach the DB**: check that `DATABASE_URL` points at a running,
-  reachable PostgreSQL and that the provider's firewall/IP allow-list permits
-  the connection. Managed providers require `DB_SSL=true`.
-- **TLS `self-signed certificate` errors on Render**: the internal database
-  URL needs `DB_SSL=true` with `DB_SSL_REJECT_UNAUTHORIZED=false` (Render's
-  internal certificates are self-signed). Never set that flag to `false`
-  for providers with valid certificates.
-- **`TEST_DATABASE_URL must point to a dedicated test database`**: rename the
-  test database so it contains `test` (e.g. `dti_test`) and create it on the
-  server, e.g.: `psql "$DATABASE_URL" -c 'CREATE DATABASE dti_test;'`.
-- **Port already in use**: another process on `PORT`? Change `PORT` in `.env`.
-- **Server exits with `Database schema is behind`**: the database was not
-  migrated (the server never migrates by itself). Run `npm run db:migrate`
-  first — on Render the start command already chains it
-  (`npm run db:migrate && npm start`).
-- **`relation "users" does not exist`**: run `npm run db:migrate`.
-- **npm 11 asks about install scripts**: `bcrypt`/`esbuild` are pre-approved
-  via `allowScripts` in `package.json`, so `npm ci` works non-interactively.
+> **Note on AI-Assisted Development:** During the development of DTI, we used **Muse Code with `muse-spark-1.3-contributor · max` as our AI development agent**
