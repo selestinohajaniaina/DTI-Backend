@@ -19,8 +19,10 @@ function parseListQuery(req: Request): ReturnType<typeof listIdeasQuerySchema.pa
 
 export const getIdeas = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   const query = parseListQuery(req);
-  const ownership = req.ownership;
-  sendSuccess(res, await listIdeas(query, ownership), 200);
+  // const ownership = req.ownership;
+  // sendSuccess(res, await listIdeas(query, ownership), 200);
+  // less undefined to show all
+  sendSuccess(res, await listIdeas(query), 200);
 });
 
 export const getSourceObjects = asyncHandler(async (req: Request, res: Response): Promise<void> => {
